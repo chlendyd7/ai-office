@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Criterion(BaseModel):
-    name: str
+    name: str = Field(min_length=1)
     weight: float = Field(default=1.0, gt=0)
     description: str = ""
 
@@ -41,6 +41,14 @@ class RunConfig(BaseModel):
     pass_score: float = Field(default=8.0, ge=0, le=10)
     max_rounds: int = Field(default=3, ge=1)  # per pass (a human "revise" starts a new pass)
     budget_usd: float = Field(default=0.5, gt=0)
+
+    @field_validator("rubric")
+    @classmethod
+    def _unique_names(cls, v: list[Criterion]) -> list[Criterion]:
+        names = [c.name.strip() for c in v]
+        if len(set(names)) != len(names):  # a duplicate would silently overwrite its twin when scores are looked up by name
+            raise ValueError("rubric criterion names must be unique")
+        return v
 
     def price_for(self, model: str) -> Pricing:
         return self.pricing_models.get(model, self.pricing)

@@ -17,9 +17,11 @@ INPUT = {"job": "데이터 엔지니어", "question": "지원동기", "draft": "
 RUBRIC = ["직무적합성", "구체성", "논리구성", "가독성", "분량준수"]
 
 
-def reply(text, tin=100, tout=50, blocks=None):
-    return httpx.Response(200, json={"content": blocks or [{"type": "text", "text": text}],
-                                     "usage": {"input_tokens": tin, "output_tokens": tout}})
+def reply(text, tin=100, tout=50, blocks=None, served=None):
+    body = {"content": blocks or [{"type": "text", "text": text}], "usage": {"input_tokens": tin, "output_tokens": tout}}
+    if served:
+        body["model"] = served
+    return httpx.Response(200, json=body)
 
 
 def review_text(score=9):
@@ -61,6 +63,18 @@ def test_base_url_or_full_endpoint_both_work(configured, expected):
     seen = {}
     call(client(lambda req: (seen.update(url=str(req.url)), reply("x"))[1], env=ENV | {"H_CHAT_BASE_URL": configured}))
     assert seen["url"] == expected
+
+
+def test_served_model_is_recorded_when_the_gateway_reports_a_different_id(tmp_path):
+    def handler(req):
+        is_review = "심사위원" in json.loads(req.content)["messages"][0]["content"]
+        return reply(review_text(9) if is_review else "초안", served="claude-resolved-20260101")
+
+    eng = engine(tmp_path, handler)
+    rid = eng.start("cover_letter", INPUT, REAL)
+    calls = [e for e in eng.store.read(rid) if e["type"] == "llm_call"]
+    assert [c["model"] for c in calls] == ["claude-sonnet-5", "claude-haiku-4-5"]  # requested (used for pricing)
+    assert {c["served_model"] for c in calls} == {"claude-resolved-20260101"}  # what actually answered
 
 
 def test_auth_prefix_and_project_header_are_configurable():

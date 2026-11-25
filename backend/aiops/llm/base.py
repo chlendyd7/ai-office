@@ -11,6 +11,7 @@ class LLMResult:
     tokens_out: int
     model: str | None = None  # the model that actually answered (falls back to client.model)
     attempts: int = 1  # HTTP attempts it took (>1 means retries happened)
+    served_model: str | None = None  # model id the gateway reports having used (may differ from the requested alias)
 
 
 class LLMClient(Protocol):

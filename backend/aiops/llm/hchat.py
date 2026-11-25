@@ -65,7 +65,7 @@ class HChatClient:
             raise HChatError("response has no usage (input_tokens/output_tokens): cannot meter this call")
         if not text:
             raise HChatError(f"empty text in response (stop_reason={data.get('stop_reason')!r}, usage={usage})")
-        return LLMResult(text, usage["input_tokens"], usage["output_tokens"], model, attempts)
+        return LLMResult(text, usage["input_tokens"], usage["output_tokens"], model, attempts, data.get("model"))
 
     def _post(self, body: dict) -> tuple[dict, int]:
         last = "unknown error"

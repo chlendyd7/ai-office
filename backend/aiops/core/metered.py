@@ -63,6 +63,7 @@ class MeteredLLM:
             cost_usd=cost,
             latency_ms=latency_ms,
             attempts=res.attempts,
+            served_model=res.served_model,
         )
         return res.text
 

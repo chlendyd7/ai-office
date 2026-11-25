@@ -69,6 +69,9 @@ svg text{fill:var(--muted);font-size:10px}
 .run{display:flex;gap:8px;align-items:flex-start}
 .run input{width:auto;margin-top:4px}
 .cmpt{margin-bottom:10px}
+.rb{display:grid;grid-template-columns:1fr 62px 30px;gap:4px;margin-top:6px}
+.rb .rb-d{grid-column:1/4;font-size:12px}
+.rb button{padding:2px 0}
 .result{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;line-height:1.7;font-size:13px}
 </style>
 </head>
@@ -106,6 +109,12 @@ svg text{fill:var(--muted);font-size:10px}
         <div><label>예산 (USD)</label><input id="f-budget" type="number" step="0.001" value="0.5"></div>
         <div id="w-delay"><label>지연 (ms/호출, 가짜)</label><input id="f-delay" type="number" min="0" value="1500"></div>
       </div>
+      <details id="rubric-box" style="margin-top:10px">
+        <summary class="muted" style="cursor:pointer">루브릭 편집 (<span id="rb-count">-</span>항목)</summary>
+        <div id="rb-rows"></div>
+        <p style="margin:8px 0 0"><button class="ghost" id="rb-add" type="button">+ 항목 추가</button>
+          <button class="ghost" id="rb-reset" type="button">기본값</button> <span id="rb-note" class="muted" style="font-size:12px"></span></p>
+      </details>
       <div id="w-scn"><label>가짜 리뷰어 점수 시나리오 (쉼표)</label><input id="f-scn" value="5,7,9"></div>
       <p style="margin:10px 0 0"><button id="b-start">실행</button> <span id="start-err" class="err"></span></p>
     </div>
@@ -200,6 +209,13 @@ async function openCompare(a, b) {
   }).join('');
   const ca = Object.fromEntries(flat(A.events[0].config)), cb = Object.fromEntries(flat(B.events[0].config));
   const diffKeys = [...new Set([...Object.keys(ca), ...Object.keys(cb)])].filter(k => ca[k] !== cb[k]);
+  const fmtCfg = (k, v) => v === undefined ? '—' : k === 'rubric' ? JSON.parse(v).map(r => `${r.name}(${r.weight})`).join(', ') : v;
+  const lastCrit = R => Object.fromEntries((R.summary.scores.at(-1)?.criteria || []).map(c => [c.name, c.score]));
+  const cra = lastCrit(A), crb = lastCrit(B);
+  const critRows = [...new Set([...Object.keys(cra), ...Object.keys(crb)])].map(n => {
+    const x = cra[n], y = crb[n], d = x != null && y != null && x !== y ? (y - x > 0 ? '+' : '') + +(y - x).toFixed(2) : '';
+    return `<tr><td>${esc(n)}</td><td>${x ?? '—'}</td><td>${y ?? '—'}</td><td>${d}</td></tr>`;
+  }).join('');
   const sameInput = JSON.stringify(A.events[0].input) === JSON.stringify(B.events[0].input);
   const ra = A.summary.result?.content, rb = B.summary.result?.content;
   const rel = B.summary.parent === a ? ' (B는 A의 재실행)' : A.summary.parent === b ? ' (A는 B의 재실행)' : '';
@@ -208,8 +224,9 @@ async function openCompare(a, b) {
     <div class="muted" style="font-size:12px;margin-bottom:8px"><b style="color:var(--accent)">A</b> ${esc(a)} · <b style="color:var(--warn)">B</b> ${esc(b)}
       · 입력 ${sameInput ? '동일' : '<span class="err">다름 (결과 비교 시 주의)</span>'}</div>
     <table class="cmpt"><tr><th></th><th>A</th><th>B</th><th>B − A</th></tr>${rows}</table>
+    <h3>항목별 최종 점수</h3>${critRows ? `<table class="cmpt"><tr><th>항목</th><th>A</th><th>B</th><th>B − A</th></tr>${critRows}</table>` : '<div class="muted">채점 결과 없음</div>'}
     <h3>설정 차이</h3>${diffKeys.length ? `<table class="cmpt"><tr><th>항목</th><th>A</th><th>B</th></tr>${diffKeys.map(k =>
-      `<tr><td>${esc(k)}</td><td>${esc(ca[k] ?? '—')}</td><td>${esc(cb[k] ?? '—')}</td></tr>`).join('')}</table>` : '<div class="muted">설정 동일</div>'}
+      `<tr><td>${esc(k)}</td><td>${esc(fmtCfg(k, ca[k]))}</td><td>${esc(fmtCfg(k, cb[k]))}</td></tr>`).join('')}</table>` : '<div class="muted">설정 동일</div>'}
     <h3 style="margin-top:12px">점수 추이 (A 파랑 · B 주황)</h3>${cmpChart(A.summary.scores, B.summary.scores)}
     <h3 style="margin-top:12px">결과물 diff (A → B)</h3><div class="result">${ra == null || rb == null ? '<span class="muted">결과 없음</span>' : diff(ra, rb)}</div>`;
   scrollTo(0, 0);
@@ -217,7 +234,26 @@ async function openCompare(a, b) {
 $('#cmp').onclick = e => { if (e.target.id === 'b-cmp-close') $('#cmp').style.display = 'none'; };
 
 /* ---------- rerun ---------- */
+function loadIntoForm() {
+  const ev = events[0]; if (!ev) return;
+  const c = ev.config, inp = ev.input, set = (id, v) => { $(id).value = v ?? ''; };
+  set('#f-job', inp.job); set('#f-q', inp.question); set('#f-draft', inp.draft);
+  set('#f-pass', c.pass_score); set('#f-max', c.max_rounds); set('#f-budget', c.budget_usd);
+  $('#f-mode').value = c.llm.mode;
+  if (c.llm.mode === 'fake') { set('#f-scn', c.llm.scenario.join(',')); set('#f-delay', c.llm.delay_ms); }
+  else {
+    set('#f-wm', c.llm.model); set('#f-rm', c.llm.models.reviewer || c.llm.model); set('#f-mt', c.llm.max_tokens);
+    const pm = c.pricing_models || {}, p1m = (m, k) => pm[m] ? +(pm[m][k] * 1000).toFixed(6) : '';
+    set('#f-wpi', p1m(c.llm.model, 'in_per_1k')); set('#f-wpo', p1m(c.llm.model, 'out_per_1k'));
+    const rm = c.llm.models.reviewer || c.llm.model;
+    set('#f-rpi', p1m(rm, 'in_per_1k')); set('#f-rpo', p1m(rm, 'out_per_1k'));
+  }
+  rubric = c.rubric.map(r => ({...r})); renderRubric(); $('#rubric-box').open = true;
+  refreshLLM().catch(() => {}); $('#start-err').textContent = '';
+  $('#f-job').scrollIntoView({behavior: 'smooth', block: 'center'});
+}
 $('#cfg').onclick = async e => {
+  if (e.target.id === 'b-load') return loadIntoForm();
   if (e.target.id !== 'b-rerun') return;
   const c = events[0]?.config; if (!c) return;
   if (c.llm.mode !== 'fake' && !confirm('실제 LLM을 다시 호출합니다. 토큰이 사용되고 과금될 수 있습니다. 계속할까요?')) return;
@@ -236,6 +272,36 @@ function select(id) {
   loadRuns();
 }
 
+/* ---------- rubric editor ---------- */
+let rubric = [], defaultRubric = [];
+const rbTotal = () => +rubric.reduce((a, r) => a + (+r.weight || 0), 0).toFixed(3);
+function renderRubric() {
+  $('#rb-count').textContent = rubric.length;
+  $('#rb-rows').innerHTML = rubric.map((r, i) => `
+    <div class="rb"><input data-i="${i}" data-f="name" value="${esc(r.name)}" placeholder="항목명">
+      <input data-i="${i}" data-f="weight" type="number" step="0.05" min="0.01" value="${esc(r.weight)}" title="가중치">
+      <button type="button" class="ghost rb-x" data-i="${i}" title="삭제">✕</button>
+      <input class="rb-d" data-i="${i}" data-f="description" value="${esc(r.description)}" placeholder="평가 기준 설명 (리뷰어 프롬프트에 들어감)"></div>`).join('');
+  $('#rb-note').textContent = `가중치 합 ${rbTotal()} (가중평균으로 정규화)`;
+}
+$('#rb-rows').addEventListener('input', e => {  // no re-render while typing (keeps focus)
+  const {i, f} = e.target.dataset; if (i === undefined) return;
+  rubric[+i][f] = e.target.value; $('#rb-note').textContent = `가중치 합 ${rbTotal()} (가중평균으로 정규화)`;
+});
+$('#rb-rows').onclick = e => { const b = e.target.closest('.rb-x'); if (b) { rubric.splice(+b.dataset.i, 1); renderRubric(); } };
+$('#rb-add').onclick = () => { rubric.push({name: '', weight: 1, description: ''}); renderRubric(); };
+$('#rb-reset').onclick = () => { rubric = structuredClone(defaultRubric); renderRubric(); };
+api('/api/workflows').then(w => { defaultRubric = w.cover_letter.rubric; rubric = structuredClone(defaultRubric); renderRubric(); }).catch(() => {});
+const rubricForRun = () => rubric.map(r => ({name: String(r.name).trim(), weight: +r.weight, description: r.description || ''}));
+function rubricError() {
+  const rs = rubricForRun();
+  if (!rs.length) return '루브릭 항목이 없습니다';
+  if (rs.some(r => !r.name)) return '루브릭 항목명이 비어 있습니다';
+  if (new Set(rs.map(r => r.name)).size !== rs.length) return '루브릭 항목명이 중복됩니다';
+  if (rs.some(r => !(r.weight > 0))) return '루브릭 가중치는 0보다 커야 합니다';
+  return '';
+}
+
 /* ---------- llm mode ---------- */
 function llmCfg(scn) {
   if ($('#f-mode').value === 'hchat')
@@ -243,7 +309,8 @@ function llmCfg(scn) {
   return {scenario: scn.length ? scn : [5], delay_ms: +$('#f-delay').value};
 }
 function buildOverrides(scn) {
-  const ov = {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value, llm: llmCfg(scn)};
+  const ov = {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value, llm: llmCfg(scn),
+              rubric: rubricForRun()};
   if ($('#f-mode').value === 'hchat') {
     const per1k = id => { const v = $(id).value; return v === '' ? null : +v / 1000; };  // USD per 1M tokens -> per 1k
     const pm = {};
@@ -276,6 +343,8 @@ $('#b-test').onclick = async () => {
 /* ---------- start ---------- */
 $('#b-start').onclick = async () => {
   $('#start-err').textContent = '';
+  const rerr = rubricError();
+  if (rerr) { $('#start-err').textContent = rerr; $('#rubric-box').open = true; return; }
   if ($('#f-mode').value === 'hchat' && !confirm('실제 LLM(H Chat)을 호출합니다. 토큰이 사용되고 과금될 수 있습니다. 계속할까요?')) return;
   const scn = $('#f-scn').value.split(',').map(s => parseFloat(s)).filter(x => !isNaN(x));
   try {
@@ -339,7 +408,7 @@ function renderTimeline() {
     switch (e.type) {
       case 'run_started': return head('sys', '실행 시작', `${esc(e.workflow)} · ${time}`) + `<h5>입력</h5><pre>${esc(JSON.stringify(e.input, null, 2))}</pre></details>`;
       case 'llm_call': return head(e.agent, `R${e.round} ${e.agent === 'writer' ? '작성자' : '리뷰어'} <span class="muted">(${e.purpose})</span>`,
-          `in ${fmt(e.tokens_in)} / out ${fmt(e.tokens_out)} · $${e.cost_usd.toFixed(6)} · ${e.latency_ms}ms${e.attempts > 1 ? ` · <span class="err">재시도 ${e.attempts - 1}회</span>` : ''} · ${esc(e.model)}`)
+          `in ${fmt(e.tokens_in)} / out ${fmt(e.tokens_out)} · $${e.cost_usd.toFixed(6)} · ${e.latency_ms}ms${e.attempts > 1 ? ` · <span class="err">재시도 ${e.attempts - 1}회</span>` : ''} · ${esc(e.model)}${e.served_model && e.served_model !== e.model ? ` <span class="muted">(응답 모델 ${esc(e.served_model)})</span>` : ''}`)
         + `<h5>프롬프트</h5><pre>${esc(e.prompt)}</pre><h5>응답</h5><pre>${esc(e.response)}</pre></details>`;
       case 'score': return head('score', `R${e.round} 채점 <b>${e.total}</b> / ${e.pass_score} ${e.passed ? '✔ 통과' : ''}`, '항목별')
         + `<table><tr><th>항목</th><th>가중치</th><th>점수</th></tr>${e.criteria.map(c => `<tr><td>${esc(c.name)}</td><td>${c.weight}</td><td>${c.score}</td></tr>`).join('')}</table>`
@@ -436,7 +505,8 @@ function renderCfg() {
          <span>모델별 단가(1k)</span><span>${Object.keys(c.pricing_models || {}).length ? esc(JSON.stringify(c.pricing_models))
            : '<span class="err">미지정 → 기본 단가로 추정 (실제와 다를 수 있음)</span>'}</span>`}
     ${summary?.parent ? `<span>재실행 원본</span><span><a href="#${esc(summary.parent)}" style="color:var(--accent)">${esc(summary.parent)}</a></span>` : ''}</div>
-    <p style="margin:10px 0 0"><button class="ghost" id="b-rerun">같은 설정으로 다시 실행</button></p>
+    <p style="margin:10px 0 0"><button class="ghost" id="b-rerun">같은 설정으로 다시 실행</button>
+      <button class="ghost" id="b-load" title="이 run의 입력과 설정을 새 실행 폼에 채워 넣고, 바꿔서 실행해 비교">폼으로 불러오기</button></p>
     <table style="margin-top:8px"><tr><th>루브릭</th><th>가중치</th></tr>${c.rubric.map(r => `<tr><td title="${esc(r.description)}">${esc(r.name)}</td><td>${r.weight}</td></tr>`).join('')}</table>`;
 }
 

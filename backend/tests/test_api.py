@@ -114,3 +114,25 @@ def test_rerun_with_overrides_changes_only_those_settings(client):
 
 def test_rerun_unknown_run_is_404(client):
     assert client.post("/api/runs/nope/rerun", json={}).status_code == 404
+
+
+@pytest.mark.parametrize("rubric", [
+    [{"name": "a", "weight": 1}, {"name": "a", "weight": 2}],  # duplicate names
+    [{"name": "", "weight": 1}],  # empty name
+    [{"name": "a", "weight": 0}],  # non-positive weight
+    [],  # no criteria
+])
+def test_invalid_rubrics_are_rejected_before_anything_is_recorded(client, rubric):
+    r = client.post("/api/runs", json={"workflow": "cover_letter", "input": INPUT, "overrides": {"rubric": rubric}})
+    assert r.status_code == 400
+    assert client.get("/api/runs").json() == []
+
+
+def test_custom_rubric_drives_the_reviewer_prompt_and_the_score_breakdown(client):
+    rubric = [{"name": "창의성", "weight": 3, "description": "독창적인가"}, {"name": "정확성", "weight": 1}]
+    rid = start(client, rubric=rubric)
+    s = wait_status(client, rid, "awaiting_approval")
+    ev = client.get(f"/api/runs/{rid}").json()["events"]
+    prompt = next(e["prompt"] for e in ev if e["type"] == "llm_call" and e["purpose"] == "review")
+    assert "창의성 (가중치 3.0): 독창적인가" in prompt and "직무적합성" not in prompt
+    assert [c["name"] for c in s["scores"][0]["criteria"]] == ["창의성", "정확성"]
