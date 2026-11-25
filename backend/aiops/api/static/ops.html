@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Ops 콘솔</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#0f1318;--panel:#171c23;--panel2:#1d232c;--line:#2a313c;--text:#e6e9ee;--muted:#8b95a5;
+  --accent:#5aa9ff;--ok:#3ecf8e;--warn:#f5b84a;--bad:#ef6b6b;--ins:#173d2b;--del:#4a1f24;
+  --mono:ui-monospace,SFMono-Regular,Consolas,"D2Coding",monospace;
+}
+@media (prefers-color-scheme:light){:root{
+  --bg:#f4f6f9;--panel:#fff;--panel2:#f0f3f7;--line:#d9dee6;--text:#1b2230;--muted:#667085;
+  --accent:#1f6fd1;--ok:#14935b;--warn:#b7791f;--bad:#d03b3b;--ins:#d7f3e3;--del:#fbdada;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"Segoe UI","Malgun Gothic",sans-serif}
+button,input,textarea{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px}
+.bar{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.brand{font-weight:700;letter-spacing:.2px}
+.kpi{display:flex;flex-direction:column;min-width:76px}
+.kpi small{color:var(--muted);font-size:11px}
+.kpi b{font-size:16px;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--line)}
+.s-running{color:var(--accent)}.s-awaiting_approval{color:var(--warn)}.s-approved{color:var(--ok)}.s-rejected,.s-failed{color:var(--bad)}
+.meter{height:5px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-top:3px;width:120px}
+.meter i{display:block;height:100%;background:var(--ok)}
+.meter.hot i{background:var(--bad)}
+main{display:grid;grid-template-columns:320px minmax(0,1fr) 360px;gap:14px;padding:14px 16px}
+@media (max-width:1150px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
+input,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+textarea{resize:vertical;min-height:70px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600}
+button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+button.ok{background:var(--ok)}button.bad{background:var(--bad)}button.warn{background:var(--warn);color:#1b1b1b}
+button:disabled{opacity:.5;cursor:default}
+.runs{max-height:300px;overflow:auto}
+.run{padding:7px 8px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.run:hover{background:var(--panel2)}.run.sel{border-color:var(--accent);background:var(--panel2)}
+.run small{color:var(--muted);display:block;font-variant-numeric:tabular-nums}
+.tl{display:flex;flex-direction:column;gap:6px}
+.ev{border:1px solid var(--line);border-left-width:4px;border-radius:8px;background:var(--panel2);padding:7px 10px}
+.ev.writer{border-left-color:var(--accent)}.ev.reviewer{border-left-color:var(--warn)}
+.ev.score{border-left-color:var(--ok)}.ev.gate{border-left-color:#b18cff}.ev.err{border-left-color:var(--bad)}.ev.sys{border-left-color:var(--muted)}
+.ev summary{cursor:pointer;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;list-style:none}
+.ev summary::-webkit-details-marker{display:none}
+.ev .t{font-weight:600}.ev .m{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.ev pre{margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font:12px/1.55 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px}
+.ev h5{margin:8px 0 0;font-size:11px;color:var(--muted);text-transform:uppercase}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+th,td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--line)}th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500}
+.tabs{display:flex;gap:6px;margin-bottom:8px}
+.tabs button{padding:4px 12px;font-size:12px}
+.tabs button.on{background:var(--accent);color:#fff}
+.result{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7}
+ins{background:var(--ins);text-decoration:none}del{background:var(--del)}
+.muted{color:var(--muted)}.err{color:var(--bad)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:12px}.kv span:nth-child(odd){color:var(--muted)}
+.gate{border-color:var(--warn)}
+svg text{fill:var(--muted);font-size:10px}
+.empty{color:var(--muted);padding:30px 10px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar" id="topbar"></div>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h3>새 실행 (가짜 LLM)</h3>
+      <label>지원 직무</label><input id="f-job" value="데이터 엔지니어">
+      <label>문항</label><input id="f-q" value="지원동기를 작성하세요">
+      <label>초안</label><textarea id="f-draft">저는 데이터에 관심이 많아 지원했습니다. 대학 시절 프로젝트에서 데이터를 다뤄 본 경험이 있습니다.</textarea>
+      <div class="row">
+        <div><label>통과 점수</label><input id="f-pass" type="number" step="0.1" value="8"></div>
+        <div><label>라운드 상한</label><input id="f-max" type="number" min="1" value="3"></div>
+        <div><label>예산 (USD)</label><input id="f-budget" type="number" step="0.001" value="0.5"></div>
+        <div><label>지연 (ms/호출)</label><input id="f-delay" type="number" min="0" value="1500"></div>
+      </div>
+      <label>가짜 리뷰어 점수 시나리오 (쉼표)</label><input id="f-scn" value="5,7,9">
+      <p style="margin:10px 0 0"><button id="b-start">실행</button> <span id="start-err" class="err"></span></p>
+    </div>
+    <div class="card">
+      <h3>실행 이력</h3>
+      <div class="runs" id="runs"></div>
+    </div>
+    <div class="card" id="cfg"></div>
+  </section>
+
+  <section>
+    <div class="card gate" id="gate" style="display:none"></div>
+    <div class="card"><h3>타임라인 (프롬프트·응답 전문)</h3><div class="tl" id="tl"><div class="empty">왼쪽에서 실행하거나 이력을 선택하세요</div></div></div>
+  </section>
+
+  <section>
+    <div class="card"><h3>점수 추이</h3><div id="chart"></div><div id="crit"></div></div>
+    <div class="card"><h3>토큰 · 비용</h3><div id="tok"></div></div>
+    <div class="card"><h3>결과물</h3>
+      <div class="tabs"><button class="on" data-tab="final">최종본</button><button class="ghost" data-tab="diff">원문 대비 diff</button></div>
+      <div id="result" class="result muted">아직 없음</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STATUS = {running:'실행 중', awaiting_approval:'승인 대기', approved:'승인됨', rejected:'반려됨', failed:'실패'};
+const REASON = {passed:'통과', max_rounds:'라운드 상한', budget_exceeded:'예산 초과'};
+const fmt = n => Number(n).toLocaleString();
+let cur = null, es = null, events = [], summary = null, tab = 'final';
+const openSeqs = new Set();
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || r.status));
+  return j;
+}
+
+/* ---------- runs list ---------- */
+async function loadRuns() {
+  const runs = await api('/api/runs');
+  $('#runs').innerHTML = runs.length ? runs.map(r => `
+    <div class="run ${r.run_id === cur ? 'sel' : ''}" data-id="${esc(r.run_id)}">
+      <span class="badge s-${r.status}">${STATUS[r.status] || r.status}</span> ${esc(r.workflow)}
+      <small>${esc(r.run_id)} · R${r.rounds} · ${r.last_score ?? '-'}점 · ${fmt(r.tokens)} tok · $${r.cost_usd.toFixed(4)}</small>
+    </div>`).join('') : '<div class="muted">실행 기록 없음</div>';
+}
+$('#runs').onclick = e => { const el = e.target.closest('.run'); if (el) select(el.dataset.id); };
+
+function select(id) {
+  if (es) es.close();
+  cur = id; events = []; summary = null; openSeqs.clear();
+  es = new EventSource(`/api/runs/${id}/stream`);
+  es.addEventListener('event', e => events.push(JSON.parse(e.data)));
+  es.addEventListener('summary', e => { summary = JSON.parse(e.data); render(); loadRuns(); });
+  loadRuns();
+}
+
+/* ---------- start ---------- */
+$('#b-start').onclick = async () => {
+  $('#start-err').textContent = '';
+  const scn = $('#f-scn').value.split(',').map(s => parseFloat(s)).filter(x => !isNaN(x));
+  try {
+    const {run_id} = await api('/api/runs', {
+      workflow: 'cover_letter',
+      input: {job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value},
+      overrides: {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value,
+                  llm: {scenario: scn.length ? scn : [5], delay_ms: +$('#f-delay').value}},
+    });
+    select(run_id);
+  } catch (e) { $('#start-err').textContent = e.message; }
+};
+
+/* ---------- render ---------- */
+function render() {
+  renderTop(); renderGate(); renderTimeline(); renderRight(); renderCfg();
+}
+
+function renderTop() {
+  const s = summary; if (!s) return;
+  const t = s.totals, cost = t.cost_usd, pct = Math.min(100, cost / s.budget_usd * 100);
+  const last = s.scores.at(-1);
+  $('#topbar').innerHTML = `
+    <span class="brand">AI Ops</span>
+    <div class="kpi"><small>상태</small><span class="badge s-${s.status}">${STATUS[s.status] || s.status}</span></div>
+    <div class="kpi"><small>토큰 입력</small><b>${fmt(t.tokens_in)}</b></div>
+    <div class="kpi"><small>토큰 출력</small><b>${fmt(t.tokens_out)}</b></div>
+    <div class="kpi"><small>토큰 합계</small><b>${fmt(t.tokens_in + t.tokens_out)}</b></div>
+    <div class="kpi"><small>비용 / 예산 (추정)</small><b>$${cost.toFixed(4)} / $${s.budget_usd}</b>
+      <div class="meter ${pct >= 100 ? 'hot' : ''}"><i style="width:${pct}%"></i></div></div>
+    <div class="kpi"><small>라운드 (패스당 상한 ${s.max_rounds})</small><b>${s.rounds}</b></div>
+    <div class="kpi"><small>최근 점수 / 통과</small><b>${last ? last.total : '-'} / ${s.pass_score}</b></div>
+    <div class="kpi"><small>LLM 호출</small><b>${t.calls}</b></div>
+    <div class="kpi"><small>종료 사유</small><b>${s.error ? '<span class="err">오류</span>' : (REASON[s.stop_reason] || '-')}</b></div>
+    <div class="kpi"><small>run</small><b style="font-size:12px">${esc(s.run_id)}</b></div>`;
+}
+
+function renderGate() {
+  const s = summary, el = $('#gate');
+  if (!s || s.status !== 'awaiting_approval') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = `<h3>최종 결정 대기 — 루프 종료: ${REASON[s.stop_reason] || s.stop_reason}</h3>
+    <div class="muted" style="margin-bottom:6px">AI는 확정하지 못합니다. 사람이 승인해야 완료됩니다. (Office 패널은 M1c에서 분리 예정, 지금은 임시로 여기에 있음)</div>
+    <textarea id="g-comment" placeholder="수정 요청 / 반려 사유 코멘트"></textarea>
+    <p style="margin:8px 0 0"><button class="ok" data-d="approve">승인</button>
+    <button class="warn" data-d="revise">수정 요청</button>
+    <button class="bad" data-d="reject">반려</button> <span id="g-err" class="err"></span></p>`;
+}
+$('#gate').onclick = async e => {
+  const d = e.target.dataset.d; if (!d) return;
+  const btns = $('#gate').querySelectorAll('button'); btns.forEach(b => b.disabled = true);
+  try { await api(`/api/runs/${cur}/decision`, {decision: d, comment: $('#g-comment').value}); }
+  catch (err) { $('#g-err').textContent = err.message; btns.forEach(b => b.disabled = false); }
+};
+
+function renderTimeline() {
+  if (!events.length) return;
+  const rows = events.map(e => {
+    const open = openSeqs.has(e.seq) ? 'open' : '';
+    const time = new Date(e.ts).toLocaleTimeString('ko-KR');
+    const head = (cls, title, meta) => `<details class="ev ${cls}" data-seq="${e.seq}" ${open}><summary><span class="t">${title}</span><span class="m">${meta}</span></summary>`;
+    switch (e.type) {
+      case 'run_started': return head('sys', '실행 시작', `${esc(e.workflow)} · ${time}`) + `<h5>입력</h5><pre>${esc(JSON.stringify(e.input, null, 2))}</pre></details>`;
+      case 'llm_call': return head(e.agent, `R${e.round} ${e.agent === 'writer' ? '작성자' : '리뷰어'} <span class="muted">(${e.purpose})</span>`,
+          `in ${fmt(e.tokens_in)} / out ${fmt(e.tokens_out)} · $${e.cost_usd.toFixed(6)} · ${e.latency_ms}ms · ${esc(e.model)}`)
+        + `<h5>프롬프트</h5><pre>${esc(e.prompt)}</pre><h5>응답</h5><pre>${esc(e.response)}</pre></details>`;
+      case 'score': return head('score', `R${e.round} 채점 <b>${e.total}</b> / ${e.pass_score} ${e.passed ? '✔ 통과' : ''}`, '항목별')
+        + `<table><tr><th>항목</th><th>가중치</th><th>점수</th></tr>${e.criteria.map(c => `<tr><td>${esc(c.name)}</td><td>${c.weight}</td><td>${c.score}</td></tr>`).join('')}</table>`
+        + e.criteria.map(c => `<div class="muted" style="font-size:12px">· ${esc(c.feedback)}</div>`).join('') + '</details>';
+      case 'call_started': return '';  // transient marker (drives office animation); the llm_call row follows
+      case 'artifact': return `<div class="ev sys"><span class="t">결과물 생성</span> <span class="m">R${e.round}</span></div>`;
+      case 'loop_stopped': return `<div class="ev sys"><span class="t">루프 종료</span> <span class="m">${REASON[e.reason] || e.reason}</span></div>`;
+      case 'gate_opened': return `<div class="ev gate"><span class="t">승인 대기</span> <span class="m">${time}</span></div>`;
+      case 'gate_decision': return `<div class="ev gate"><span class="t">결정: ${{approve:'승인',revise:'수정 요청',reject:'반려'}[e.decision]}</span> <span class="m">${esc(e.actor)} · ${time}</span>${e.comment ? `<div>${esc(e.comment)}</div>` : ''}</div>`;
+      case 'run_finished': return `<div class="ev ${e.status === 'failed' ? 'err' : 'gate'}"><span class="t">실행 종료: ${STATUS[e.status] || e.status}</span> <span class="m">${esc(e.reason)}</span></div>`;
+      case 'error': return `<div class="ev err"><span class="t">오류</span><pre>${esc(e.message)}</pre></div>`;
+      default: return `<div class="ev sys">${esc(e.type)}</div>`;
+    }
+  });
+  const tl = $('#tl'), atBottom = innerHeight + scrollY >= document.body.scrollHeight - 80;
+  tl.innerHTML = rows.join('');
+  if (atBottom && summary && summary.status === 'running') scrollTo(0, document.body.scrollHeight);
+}
+$('#tl').addEventListener('toggle', e => {
+  const seq = +e.target.dataset?.seq; if (isNaN(seq)) return;
+  e.target.open ? openSeqs.add(seq) : openSeqs.delete(seq);
+}, true);
+
+function renderRight() {
+  const s = summary; if (!s) return;
+  // score chart
+  const W = 330, H = 130, pad = 22, pts = s.scores;
+  if (pts.length) {
+    const x = i => pad + (pts.length === 1 ? (W - 2 * pad) / 2 : i * (W - 2 * pad) / (pts.length - 1));
+    const y = v => H - pad - v / 10 * (H - 2 * pad);
+    $('#chart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%">
+      ${[0, 5, 10].map(v => `<line x1="${pad}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="2" y="${y(v) + 3}">${v}</text>`).join('')}
+      <line x1="${pad}" x2="${W - pad}" y1="${y(s.pass_score)}" y2="${y(s.pass_score)}" stroke="var(--ok)" stroke-dasharray="4 3"/>
+      <text x="${pad + 4}" y="${y(s.pass_score) - 3}" style="fill:var(--ok)">통과 ${s.pass_score}</text>
+      <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${pts.map((p, i) => `${x(i)},${y(p.total)}`).join(' ')}"/>
+      ${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.total)}" r="3.5" fill="var(--accent)"/><text x="${x(i) - 6}" y="${y(p.total) - 7}" style="fill:var(--text)">${p.total}</text><text x="${x(i) - 6}" y="${H - 6}">R${p.round}</text>`).join('')}
+    </svg>`;
+    const lastS = pts.at(-1);
+    $('#crit').innerHTML = `<div class="muted" style="margin:6px 0 2px;font-size:12px">R${lastS.round} 항목별</div><table>
+      ${lastS.criteria.map(c => `<tr><td>${esc(c.name)}</td><td>${c.score}</td></tr>`).join('')}</table>`;
+  } else { $('#chart').innerHTML = '<div class="muted">채점 대기 중</div>'; $('#crit').innerHTML = ''; }
+
+  // tokens
+  const row = (k, b) => `<tr><td>${esc(k)}</td><td>${b.calls}</td><td>${fmt(b.tokens_in)}</td><td>${fmt(b.tokens_out)}</td><td>$${b.cost_usd.toFixed(5)}</td></tr>`;
+  const head = '<tr><th></th><th>호출</th><th>입력</th><th>출력</th><th>비용</th></tr>';
+  $('#tok').innerHTML = `<table>${head}${Object.entries(s.by_agent).map(([k, b]) => row(k === 'writer' ? '작성자' : k === 'reviewer' ? '리뷰어' : k, b)).join('')}${row('합계', s.totals)}</table>
+    <div class="muted" style="margin:8px 0 2px;font-size:12px">라운드별</div>
+    <table>${head}${Object.entries(s.by_round).map(([k, b]) => row('R' + k, b)).join('')}</table>
+    <div class="muted" style="margin-top:6px;font-size:11px">비용은 설정 단가 기준 추정치이며 실제 청구액과 다를 수 있음. 가짜 LLM 토큰은 글자 수 기반 추정.</div>`;
+
+  renderResult();
+}
+
+function renderResult() {
+  const s = summary, el = $('#result');
+  if (!s || !s.result) { el.className = 'result muted'; el.textContent = s && s.error ? '오류로 결과 없음' : '아직 없음'; return; }
+  el.className = 'result';
+  if (tab === 'final') { el.textContent = s.result.content; return; }
+  el.innerHTML = diff(s.input.draft || '', s.result.content);
+}
+document.querySelector('.tabs').onclick = e => {
+  const t = e.target.dataset.tab; if (!t) return; tab = t;
+  document.querySelectorAll('.tabs button').forEach(b => b.className = b.dataset.tab === t ? 'on' : 'ghost');
+  renderResult();
+};
+
+function diff(a, b) { // word-level LCS diff
+  const A = a.split(/(\s+)/), B = b.split(/(\s+)/), n = A.length, m = B.length;
+  const L = Array.from({length: n + 1}, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  let i = 0, j = 0, out = '';
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out += esc(A[i]); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) out += `<del>${esc(A[i++])}</del>`;
+    else out += `<ins>${esc(B[j++])}</ins>`;
+  }
+  while (i < n) out += `<del>${esc(A[i++])}</del>`;
+  while (j < m) out += `<ins>${esc(B[j++])}</ins>`;
+  return out;
+}
+
+function renderCfg() {
+  const c = events[0]?.config; if (!c) return;
+  $('#cfg').innerHTML = `<h3>설정 스냅샷 (이 run)</h3><div class="kv">
+    <span>통과 점수</span><span>${c.pass_score}</span><span>라운드 상한(패스당)</span><span>${c.max_rounds}</span>
+    <span>예산</span><span>$${c.budget_usd}</span><span>LLM</span><span>${esc(c.llm.mode)} / ${esc(c.llm.model)}</span>
+    <span>단가(1k tok)</span><span>in $${c.pricing.in_per_1k} / out $${c.pricing.out_per_1k}</span>
+    <span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span></div>
+    <table style="margin-top:8px"><tr><th>루브릭</th><th>가중치</th></tr>${c.rubric.map(r => `<tr><td title="${esc(r.description)}">${esc(r.name)}</td><td>${r.weight}</td></tr>`).join('')}</table>`;
+}
+
+loadRuns();
+setInterval(loadRuns, 4000);
+function fromHash() { if (location.hash.length > 1) select(decodeURIComponent(location.hash.slice(1))); }  // deep link: /ops#<run_id>
+addEventListener('hashchange', fromHash);
+fromHash();
+</script>
+</body>
+</html>

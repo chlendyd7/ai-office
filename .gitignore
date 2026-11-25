@@ -1,0 +1,12 @@
+# local / temp (not part of the project)
+_ref/
+_*.log
+tools/
+zep/
+loop-sim/
+
+# backend
+backend/.venv/
+backend/runs/
+__pycache__/
+.pytest_cache/

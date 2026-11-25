@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Office</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#15131a;--panel:#201d28;--panel2:#292535;--line:#363140;--fg:#efeaf5;--dim:#9d96ac;--acc:#ffcf5c;
+  --work:#4aa3ff;--wait:#8e98b0;--err:#ff6370;--done:#46d98a;
+  --mono:Consolas,'D2Coding','Cascadia Mono',monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 30% -10%,#221d2e 0,var(--bg) 60%) fixed;color:var(--fg);
+  font:14px/1.5 'Malgun Gothic','Apple SD Gothic Neo',system-ui,sans-serif;background-color:var(--bg)}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+header{display:flex;align-items:center;gap:22px;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;white-space:nowrap}
+.mark{display:grid;grid-template-columns:repeat(3,6px);gap:2px}
+.mark i{width:6px;height:6px;background:var(--c)}
+.brand h1{font-size:16px;margin:0;font-weight:800;letter-spacing:.02em}
+.stats{display:flex;gap:10px;flex-wrap:wrap;flex:1}
+.stat{display:flex;align-items:baseline;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 11px}
+.stat i{width:7px;height:7px;border-radius:2px;background:var(--c);align-self:center}
+.stat b{font:700 15px var(--mono);font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:var(--dim)}
+.ctl{display:flex;gap:8px;align-items:center}
+button,.ctl a{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px 12px;cursor:pointer;text-decoration:none;font-size:13px;transition:border-color .15s,background .15s}
+button:hover,.ctl a:hover{border-color:#5a5368;background:var(--panel2)}
+button kbd{font:11px var(--mono);color:var(--dim);margin-left:6px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;padding:18px 20px;align-items:start}
+@media(max-width:1020px){main{grid-template-columns:1fr}}
+.stage canvas{display:block;width:100%;height:auto;border-radius:12px;border:1px solid var(--line);image-rendering:pixelated;background:#222;
+  box-shadow:0 18px 50px -20px #000,0 0 0 4px #1b1822}
+.below{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:12px 4px 0;color:var(--dim);font-size:12px}
+.legend{display:flex;gap:14px;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--c)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:16px}
+aside .card{margin-top:0}
+.card h2{font-size:11px;color:var(--dim);font-weight:700;margin:0 0 10px;letter-spacing:.08em;text-transform:uppercase}
+.empty{color:var(--dim);font-size:13px;padding:18px 6px;text-align:center}
+.item{padding:9px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.item:hover{background:var(--panel2)}.item.sel{background:#322c40;border-color:#ffcf5c66}
+.item b{font-weight:600;margin-left:6px}
+.item small{display:block;color:var(--dim);margin-top:2px}
+.chip{font-size:11px;font-weight:700;color:var(--c);border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-radius:999px;padding:0 8px;white-space:nowrap}
+.dh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.dh b{font-size:18px}.dh .q{color:var(--dim)}
+.score{display:flex;align-items:baseline;gap:10px;margin:6px 0 14px}
+.score b{font:700 42px/1 var(--mono);font-variant-numeric:tabular-nums}
+.score span{color:var(--dim)}
+.result{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;line-height:1.8;max-height:34vh;overflow:auto}
+.note{margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--panel2);color:var(--dim);font-size:13px}
+textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btns button{border:0;border-radius:8px;padding:9px 20px;font-weight:700;color:#14121a}
+.btns .ok{background:var(--done)}.btns .warn{background:var(--acc)}.btns .bad{background:var(--err);color:#fff}
+.btns button:disabled{opacity:.5;cursor:default}
+.errtxt{color:var(--err);margin-top:6px}
+.hist{margin:0;padding:0;list-style:none;border-left:2px solid var(--line);font-size:13px;color:var(--dim)}
+.hist li{padding:2px 0 2px 12px}.hist time{font:11px var(--mono);margin-right:8px}.hist b{color:var(--fg)}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="mark"><i style="--c:#b074e0"></i><i style="--c:#e6bf3f"></i><i style="--c:#e0647f"></i><i style="--c:#4d8cf5"></i><i style="--c:#19b5a5"></i><i style="--c:#e07a4f"></i></span>
+    <h1>AI Office</h1>
+  </div>
+  <div class="stats">
+    <div class="stat"><i style="--c:var(--work)"></i><b id="sWork">0</b><span>작업 중</span></div>
+    <div class="stat"><i style="--c:var(--acc)"></i><b id="sPend">0</b><span>결정 대기</span></div>
+    <div class="stat"><i style="--c:var(--done)"></i><b id="sDone">0</b><span>승인 완료</span></div>
+  </div>
+  <div class="ctl">
+    <button id="light" title="시간대 변경">시간대 <b id="lightLbl">낮</b><kbd>L</kbd></button>
+    <a id="opslink" href="/ops" target="_blank">Ops 콘솔 ↗</a>
+  </div>
+</header>
+<main>
+  <div>
+    <section class="stage">
+      <canvas id="view" width="960" height="540" aria-label="AI 에이전트 오피스 시각화"></canvas>
+      <div class="below">
+        <div class="legend" id="legend"></div>
+        <div>에이전트가 일하는 모습만 보여줍니다 · 확정은 사람(결정권자)만 할 수 있습니다</div>
+      </div>
+    </section>
+    <section class="card" id="detail"><div class="empty">오른쪽에서 실행을 선택하세요</div></section>
+  </div>
+  <aside><div class="card"><h2>결정 대기 / 이력</h2><div id="list"><div class="empty">실행 기록 없음</div></div></div></aside>
+</main>
+<script>
+const W=320,H=180,S=3;
+const FONT="'Malgun Gothic','Apple SD Gothic Neo',system-ui,sans-serif";
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const view=document.getElementById('view'),vg=view.getContext('2d');vg.imageSmoothingEnabled=false;
+const mk=()=>{const c=document.createElement('canvas');c.width=W;c.height=H;return c};
+const px=mk(),g=px.getContext('2d'),bgc=mk(),b=bgc.getContext('2d');
+const R=(c,x,y,w,h,col)=>{c.fillStyle=col;c.fillRect(Math.round(x),Math.round(y),w,h)};
+const rnd=n=>{const x=Math.sin(n*127.1)*43758.5453;return x-Math.floor(x)};
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const rr=(a,b)=>a+Math.random()*(b-a), ri=(a,b)=>Math.floor(rr(a,b+1));
+function shade(hex,k){const n=parseInt(hex.slice(1),16);const f=v=>Math.max(0,Math.min(255,Math.round(v*k)));
+  return '#'+((1<<24)+(f(n>>16&255)<<16)+(f(n>>8&255)<<8)+f(n&255)).toString(16).slice(1)}
+const fmt=n=>n>=1000?(n/1000).toFixed(1)+'k':''+n;
+const clock=()=>new Date().toTimeString().slice(0,8);
+
+/* ---------- 설정 ---------- */
+const TEAMS={
+  plan:{name:'작성팀',col:'#b074e0',rug:'#cdbbe3'},
+  res:{name:'검토팀',col:'#e6bf3f',rug:'#ecdfa6'},
+  dev:{name:'예비 자리',col:'#8a8499',rug:'#cfcbd6'}
+};
+const DESK_TEAM=['plan','plan','res','res','res','dev','dev','dev','dev','dev'];
+// 워크플로의 agent 이름 -> 오피스 캐릭터. 모르는 agent는 예비 자리에 자동 배치.
+const ROLES={
+  writer:{name:'작성자',team:'plan',desk:0,hair:'#5a3a22'},
+  reviewer:{name:'리뷰어',team:'res',desk:2,hair:'#1c1c24'}
+};
+const STATE={thinking:{goal:'seat'},standby:{goal:'seat'},done:{goal:'report'},idle:{goal:'lounge'},error:{goal:'seat'}};
+
+/* ---------- 레이아웃 ---------- */
+const DX=[36,72,108,144,180], DY=[44,96], AISLE=[78,134];
+const SLOTS={
+  library:{cx:216,dir:'u',pts:[[238,64],[254,64],[270,64],[286,64],[302,64]]},
+  lounge:{cx:216,dir:'d',pts:[[240,146],[258,150],[276,146],[294,150],[232,160],[250,164],[272,160],[292,164]]},
+  report:{cx:10,dir:'r',pts:[[104,146],[104,158],[92,152],[92,164],[80,148]]}
+};
+for(const k in SLOTS)SLOTS[k].slots=SLOTS[k].pts.map(([x,y])=>({x,y,by:null}));
+const ORCH_DESK={x:112,y:148};
+const TV={x:168,y:4,w:44,h:18};
+const WINDOWS=[64,100,136];
+
+/* ---------- 배경(정적) ---------- */
+function carpet(x,y,w,h,col){
+  R(b,x+1,y,w-2,h,shade(col,.84));R(b,x,y+1,w,h-2,shade(col,.84));
+  R(b,x+2,y+2,w-4,h-4,col);R(b,x+3,y+3,w-6,1,shade(col,1.07));
+}
+function drawBG(){
+  // 마루
+  for(let y=28;y<H;y+=4){const row=(y-28)/4;
+    for(let x=-((row*7)%24);x<W;x+=24){
+      R(b,x,y,24,4,shade('#d8c5a1',.96+rnd(row*31+x)*.07));R(b,x,y+3,24,1,'rgba(0,0,0,.07)');R(b,x,y,1,4,'rgba(0,0,0,.08)')}}
+  // 팀 카펫
+  carpet(18,33,72,44,TEAMS.plan.rug);carpet(92,33,106,44,TEAMS.res.rug);carpet(18,85,180,43,TEAMS.dev.rug);
+  // 벽
+  R(b,0,0,W,24,'#55648a');for(let x=10;x<W;x+=20)R(b,x,0,1,24,'rgba(255,255,255,.06)');
+  R(b,0,20,W,4,'rgba(0,0,0,.10)');
+  R(b,0,24,W,4,'#38425e');R(b,0,24,W,1,'#6d7da3');R(b,0,27,W,1,'rgba(0,0,0,.25)');
+  // 벽 그림자 (바닥에 드리움)
+  R(b,0,28,W,3,'rgba(0,0,0,.10)');R(b,0,28,W,1,'rgba(0,0,0,.10)');
+  // 서버 랙
+  [6,22].forEach(x=>{R(b,x,3,14,24,'#232733');R(b,x,3,14,1,'#3b4254');for(let i=0;i<5;i++)R(b,x+2,6+i*4,8,3,'#343b4b');R(b,x+1,27,14,2,'rgba(0,0,0,.18)')});
+  // 시계
+  R(b,43,8,10,10,'#f4f4f4');R(b,43,8,10,1,'#c9c9c9');R(b,48,9,1,5,'#222');R(b,48,13,3,1,'#222');
+  // 자료실
+  const BOOK=['#c0504d','#4f81bd','#9bbb59','#8064a2','#f79646','#4bacc6','#e6c84a','#d9d9d9'];
+  R(b,224,50,92,4,'rgba(0,0,0,.14)');
+  R(b,226,8,88,44,'#4a321e');R(b,228,10,84,40,'#6b4a2f');
+  for(let r=0;r<3;r++){const y=12+r*13;R(b,228,y+10,84,2,'#4a321e');let x=229,k=0;
+    while(x<309){const w=2+Math.floor(rnd(r*50+k)*3),h=6+Math.floor(rnd(r*50+k+.5)*4);
+      R(b,x,y+10-h,w,h,BOOK[Math.floor(rnd(r*90+k+3)*BOOK.length)]);x+=w+(rnd(k+r)>.85?2:0);k++}}
+  R(b,222,56,96,16,'#5d6ca3');R(b,223,57,94,14,'#6b7bb0');R(b,222,56,96,1,'#8e9cd0');R(b,222,71,96,1,'#4a5788');
+  for(let x=226;x<316;x+=6)R(b,x,60,2,1,'#7d8cc2');
+  // 휴게실
+  R(b,222,136,96,42,'#8e5251');R(b,223,137,94,40,'#a2605f');R(b,222,136,96,1,'#c27d7a');
+  R(b,230,130,50,3,'rgba(0,0,0,.14)');
+  R(b,232,112,46,8,'#34607f');R(b,232,120,46,10,'#4a7fa6');R(b,230,114,3,16,'#2c5370');R(b,277,114,3,16,'#2c5370');R(b,236,121,16,2,'#5d93bd');R(b,258,121,16,2,'#5d93bd');
+  R(b,290,104,14,22,'#2d313c');R(b,292,106,10,6,'#444b5c');R(b,296,114,2,2,'#ff5d5d');R(b,293,119,8,4,'#cfd6e3');R(b,289,126,16,2,'rgba(0,0,0,.16)');
+  R(b,306,122,8,7,'#a0603a');R(b,305,112,10,10,'#2f8a50');R(b,308,107,4,6,'#3aa060');
+  // 장식 화분
+  plant(4,32);plant(201,34);plant(203,120);
+  // 책상 + 의자
+  const desk=(x,y,w,col)=>{R(b,x+1,y+11,w,3,'rgba(0,0,0,.16)');R(b,x,y,w,9,'#9a6b42');R(b,x,y,w,1,'#b88257');R(b,x,y+9,w,2,'#6e4a2c');R(b,x+w/2-5,y+9,10,2,col)};
+  const chair=(cx,feet)=>{R(b,cx-6,feet-1,12,2,'rgba(0,0,0,.14)');R(b,cx-6,feet-12,12,12,'#2f3547');R(b,cx-5,feet-13,10,1,'#3b4258');R(b,cx-6,feet-12,1,12,'#262b3a')};
+  DESK_TEAM.forEach((team,i)=>{const cx=DX[i%5],y=DY[i<5?0:1];
+    chair(cx,y+27);desk(cx-14,y,28,TEAMS[team].col);
+    R(b,cx-6,y-9,12,9,'#1c2029');R(b,cx-1,y-1,2,2,'#2a2f3a');
+    R(b,cx-4,y+3,8,2,'#cfd6e3');R(b,cx+7,y+4,2,2,'#cfd6e3');R(b,cx-12,y+3,3,3,'#eee');R(b,cx-12,y+3,3,1,'#c9a37a');
+    R(b,cx+9,y-4,1,4,'#444');R(b,cx+8,y-6,3,2,'#ffd27a');R(b,cx-10,y+6,4,2,'#fff');R(b,cx-9,y+6,3,1,'#d0d6e2')});
+  chair(130,175);desk(ORCH_DESK.x,ORCH_DESK.y,36,'#d4b24c');
+  [122,138].forEach(cx=>{R(b,cx-6,ORCH_DESK.y-9,12,9,'#1c2029');R(b,cx-1,ORCH_DESK.y-1,2,2,'#2a2f3a')});
+}
+function plant(x,y){R(b,x-1,y+14,12,2,'rgba(0,0,0,.14)');R(b,x+2,y+9,6,6,'#a0603a');R(b,x+2,y+9,6,1,'#c07a50');
+  R(b,x,y+2,10,8,'#2f8a50');R(b,x+2,y,6,5,'#3aa060');R(b,x+4,y-2,2,4,'#46b56c')}
+drawBG();
+
+/* ---------- 에이전트 ---------- */
+const agents=[],byId={},takenDesks=new Set();
+function spawnAgent(key){
+  const role=ROLES[key]||{name:key,team:'dev',hair:pick(['#2b2b36','#8a4b2a','#3a2a5a','#c98a3c'])};
+  let desk=role.desk;
+  if(desk==null||takenDesks.has(desk)){desk=[5,6,7,8,9,3,4,1].find(d=>!takenDesks.has(d));if(desk==null)return null}
+  takenDesks.add(desk);
+  const cx=DX[desk%5],row=desk<5?0:1,dy=DY[row];
+  const seat={t:'seat',group:'seat',x:cx,y:dy+27,aisleY:AISLE[row],desk:{cx,y:dy}};
+  const a={id:key,idx:desk,name:role.name,team:role.team,hair:role.hair,shirt:TEAMS[role.team].col,x:cx,y:dy+27,seat,at:seat,goal:'lounge',path:[],target:null,
+    seated:true,dir:'u',frame:0,ft:0,state:'idle',task:null};
+  agents.push(a);byId[key]=a;return a;
+}
+Object.keys(ROLES).forEach(spawnAgent);
+const orch={id:'orch',idx:99,name:'결정권자',x:130,y:175,seated:true,dir:'u',hair:'#d9b84a',shirt:'#2b3350',state:'idle',flash:0,flashTxt:'',flashCol:'#fff',awaiting:false};
+
+/* ---------- 파티클 ---------- */
+const parts=[];
+function spawnText(x,y,txt,col){if(RM)return;parts.push({x,y,vx:0,vy:-8,life:1.7,age:0,txt,col})}
+function spawnBurst(x,y){if(RM)return;for(let i=0;i<12;i++){const an=Math.random()*6.28,sp=rr(10,30);
+  parts.push({x,y,vx:Math.cos(an)*sp,vy:Math.sin(an)*sp-16,life:.9,age:0,col:pick(['#ffe27a','#46d98a','#7fd0ff','#fff']),sq:1})}}
+function updateParts(dt){for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.age+=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;if(p.sq)p.vy+=64*dt;if(p.age>p.life)parts.splice(i,1)}}
+
+/* ---------- 이벤트: 서버의 office activity 스트림 -> 오피스 ---------- */
+function setState(a,s,task){a.state=s;a.task=task||null;a.goal=STATE[s].goal}
+function floorReset(){orch.awaiting=false;orch.flash=0;agents.forEach(a=>setState(a,'idle'))}
+const FLASH={approve:['승인 ✓','#46d98a'],reject:['반려','#ff6370'],revise:['수정 요청','#ffcf5c']};
+const LABEL={write:'작성',review:'검토'};
+function applyActivity(ev){
+  switch(ev.k){
+    case 'begin': floorReset();agents.forEach(a=>setState(a,'standby'));break;
+    case 'start':{const a=byId[ev.agent]||spawnAgent(ev.agent);if(a)setState(a,'thinking',(LABEL[ev.purpose]||ev.purpose)+' R'+ev.round);break}
+    case 'end':{const a=byId[ev.agent];if(a)setState(a,'standby');break}
+    case 'gate':agents.forEach(a=>setState(a,'done'));orch.awaiting=true;break;
+    case 'decision':{orch.awaiting=false;[orch.flashTxt,orch.flashCol]=FLASH[ev.decision];orch.flash=2.6;
+      if(ev.decision==='revise')agents.forEach(a=>setState(a,'standby'));break}
+    case 'finished':agents.forEach(a=>setState(a,ev.status==='failed'?'error':'idle'));orch.awaiting=false;break;
+  }
+}
+
+/* ---------- 이동 ---------- */
+function acquire(group,a){
+  const sl=SLOTS[group].slots,free=sl.filter(s=>!s.by),s=pick(free.length?free:sl);s.by=a;
+  return{t:'dest',group,x:s.x,y:s.y,cx:SLOTS[group].cx,slot:s};
+}
+function route(f,t){
+  if(f.t==='seat')return[[f.x,f.aisleY],[t.cx,f.aisleY],[t.cx,t.y],[t.x,t.y]];
+  if(t.t==='seat')return[[f.cx,f.y],[f.cx,t.aisleY],[t.x,t.aisleY],[t.x,t.y]];
+  if(f.cx===t.cx)return[[f.cx,f.y],[t.cx,t.y],[t.x,t.y]];
+  return[[f.cx,f.y],[f.cx,134],[t.cx,134],[t.cx,t.y],[t.x,t.y]];
+}
+function plan(a){
+  const to=a.goal==='seat'?a.seat:acquire(a.goal,a);
+  if(a.at.slot)a.at.slot.by=null;
+  a.path=route(a.at,to);a.target=to;a.seated=false;
+}
+function move(a,dt){
+  let step=46*dt;a.ft+=dt;if(a.ft>.2){a.ft=0;a.frame^=1}
+  while(step>0&&a.path.length){
+    const p=a.path[0],dx=p[0]-a.x,dy=p[1]-a.y,d=Math.hypot(dx,dy);
+    if(d>0.01)a.dir=Math.abs(dx)>Math.abs(dy)?(dx>0?'r':'l'):(dy>0?'d':'u');
+    if(d<=step){a.x=p[0];a.y=p[1];a.path.shift();step-=d}else{a.x+=dx/d*step;a.y+=dy/d*step;step=0}
+  }
+  if(!a.path.length){
+    a.at=a.target;a.seated=a.at.t==='seat';
+    a.dir=a.seated?'u':SLOTS[a.at.group].dir;
+    if(a.at.group==='report')spawnBurst(a.x,a.y-9);
+  }
+}
+function update(dt){
+  for(const a of agents){
+    if(a.path.length)move(a,dt);else if(a.at.group!==a.goal){plan(a);move(a,dt)}
+  }
+  if(orch.flash>0)orch.flash-=dt;
+  updateParts(dt);
+}
+
+/* ---------- 조명 ---------- */
+const LIGHTS=[['day','낮'],['dusk','저녁'],['night','밤'],['auto','자동']];
+let lightIdx=0;
+function lightMode(){const s=LIGHTS[lightIdx][0];if(s!=='auto')return s;const h=new Date().getHours();return h>=6&&h<17?'day':h>=17&&h<20?'dusk':'night'}
+
+/* ---------- 그리기 ---------- */
+function drawWindows(mode,t){
+  const sky={day:['#8fd0ee','#a9dcf2'],dusk:['#f0a56a','#f7c98e'],night:['#18223f','#26335c']}[mode];
+  WINDOWS.forEach(x=>{
+    R(g,x,5,24,16,mode==='night'?'#7a84a4':'#e9eef7');R(g,x+1,6,22,14,sky[0]);R(g,x+1,13,22,7,sky[1]);R(g,x+11,6,2,14,mode==='night'?'#7a84a4':'#e9eef7');
+    if(mode==='night'){for(let i=0;i<5;i++)if(Math.sin(t*1.5+i*2+x)>-.4)R(g,x+2+((i*5+x)%19),7+(i*3%9),1,1,'#fff');R(g,x+17,8,3,3,'#f3efc8');R(g,x+18,8,2,2,'#18223f')}
+    else if(mode==='day'){R(g,x+3,8,5,2,'#fff');R(g,x+15,10,4,2,'#fff');R(g,x+2+(Math.floor(t*.5)%3),9,0,0,'#fff')}
+    else{R(g,x+14,16,8,3,'#ffd9a0')}
+  });
+}
+function drawBeams(mode){
+  if(mode==='night')return;
+  g.fillStyle=mode==='dusk'?'rgba(255,170,100,.13)':'rgba(255,250,215,.11)';
+  WINDOWS.forEach(x=>{g.beginPath();g.moveTo(x+2,28);g.lineTo(x+22,28);g.lineTo(x+56,84);g.lineTo(x+36,84);g.fill()});
+}
+function drawTV(t){
+  R(g,TV.x,TV.y,TV.w,TV.h,'#101218');R(g,TV.x+1,TV.y+1,TV.w-2,TV.h-2,'#0c1a2a');
+  const c=s=>agents.filter(a=>s.includes(a.state)).length;
+  const rows=[[c(['thinking','tool']),'#4aa3ff'],[c(['standby','idle','done']),'#8e98b0'],[c(['error']),'#ff6370']];
+  rows.forEach(([n,col],i)=>{R(g,TV.x+3,TV.y+4+i*4,38,2,'#16263a');R(g,TV.x+3,TV.y+4+i*4,Math.round(n/agents.length*38),2,col)});
+  R(g,TV.x+TV.w-4,TV.y+2,1,1,Math.floor(t*2)%2?'#46d98a':'#1d5a3a');
+  R(g,TV.x+TV.w/2-6,TV.y+TV.h,12,1,'#101218');
+}
+function drawScreens(t){
+  const scr=(cx,y,mode)=>{
+    if(mode==='think'){R(g,cx-5,y-8,10,6,'#143a5c');for(let i=0;i<3;i++)R(g,cx-4,y-7+i*2,2+(Math.floor(t*3+i*2)%6),1,'#7fd0ff')}
+    else if(mode==='error')R(g,cx-5,y-8,10,6,Math.floor(t*4)%2?'#c0392b':'#4a1612');
+    else if(mode==='done')R(g,cx-5,y-8,10,6,'#2f9e6a');
+    else R(g,cx-5,y-8,10,6,'#1a2030');
+  };
+  for(const a of agents){
+    const m=a.state==='thinking'?'think':a.state==='error'?'error':a.state==='done'?'done':'off';
+    scr(a.seat.desk.cx,a.seat.desk.y,a.seated?m:'off');
+  }
+  scr(122,ORCH_DESK.y,orch.awaiting?'think':'off');scr(138,ORCH_DESK.y,orch.awaiting?'think':'off');
+  const busy=agents.filter(a=>a.state==='thinking'||a.state==='tool').length;
+  [6,22].forEach((x,r)=>{for(let i=0;i<5;i++){
+    const on=Math.sin(t*(2+busy*.9)+i*1.7+r*3)>0;R(g,x+11,6+i*4,2,2,on?'#3ddc84':'#164f2e')}});
+  for(let i=0;i<3;i++)R(g,297+Math.round(Math.sin(t*2+i)*1),99-((t*6+i*4)%10|0),1,1,'rgba(255,255,255,.55)');
+}
+function drawAgent(a,t){
+  const x=Math.round(a.x),y=Math.round(a.y),skin='#f1c9a0',dark=shade(a.shirt,.74),pants='#2f3447',shoe='#14151c';
+  const walking=!a.seated&&a.path.length>0;
+  const back=a.seated||a.dir==='u';
+  if(!a.seated)R(g,x-4,y-1,8,2,'rgba(0,0,0,.2)');else R(g,x-5,y-4,10,1,'rgba(0,0,0,.12)');
+  if(!a.seated){
+    const lL=walking&&a.frame===0?1:0,lR=walking&&a.frame===1?1:0;
+    R(g,x-3,y-3,2,2-lL,pants);R(g,x-3,y-1-lL,2,1,shoe);
+    R(g,x+1,y-3,2,2-lR,pants);R(g,x+1,y-1-lR,2,1,shoe);
+  }
+  let aL=0,aR=0;
+  if(a.seated&&a.state==='thinking'){aL=Math.floor(t*6)%2;aR=1-aL}
+  else if(walking){aL=a.frame;aR=1-a.frame}
+  R(g,x-4,y-10,8,7,a.shirt);R(g,x-4,y-4,8,1,dark);R(g,x-4,y-10,8,1,shade(a.shirt,1.15));
+  R(g,x-5,y-9+aL,1,5,dark);R(g,x+4,y-9+aR,1,5,dark);R(g,x-5,y-5+aL,1,1,skin);R(g,x+4,y-5+aR,1,1,skin);
+  R(g,x-3,y-15,6,5,back?a.hair:skin);
+  R(g,x-3,y-16,6,2,a.hair);R(g,x-4,y-15,1,3,a.hair);R(g,x+3,y-15,1,3,a.hair);R(g,x-2,y-16,2,1,shade(a.hair,1.7));
+  if(!back){
+    const o=a.dir==='r'?1:a.dir==='l'?-1:0,blink=((t*.7+a.idx*1.3)%4.5)<.12;
+    if(!blink){R(g,x-2+o,y-13,1,1,'#222');R(g,x+1+o,y-13,1,1,'#222')}
+    else{R(g,x-2+o,y-12,1,1,'#222');R(g,x+1+o,y-12,1,1,'#222')}
+    R(g,x-3,y-11,1,1,'rgba(255,120,120,.35)');R(g,x+2,y-11,1,1,'rgba(255,120,120,.35)');
+  }
+}
+function pill(txt,cx,cy,o={}){
+  vg.font=`bold ${o.size||10}px ${FONT}`;vg.textAlign='left';vg.textBaseline='middle';
+  const tw=vg.measureText(txt).width,dot=o.dot?10:0,w=tw+dot+10,h=(o.size||10)+7,x=Math.round(cx-w/2),y=Math.round(cy-h/2);
+  vg.fillStyle=o.bg||'rgba(10,12,18,.72)';vg.beginPath();vg.roundRect(x,y,w,h,4);vg.fill();
+  if(o.dot){vg.fillStyle=o.dot;vg.fillRect(x+5,y+h/2-3,6,6)}
+  vg.fillStyle=o.fg||'#fff';vg.fillText(txt,x+5+dot,y+h/2+.5);
+}
+function bubble(a,t){
+  let txt,bg='#fff',fg='#1a1d26';
+  if(a.id==='orch'){
+    if(orch.flash>0){txt=orch.flashTxt;bg=orch.flashCol;fg='#14121a'}
+    else if(orch.awaiting){txt=(Math.floor(t*2)%2?'● ':'○ ')+'결정 대기';bg='#ffcf5c'}
+    else return;
+  }
+  else if(a.state==='thinking'&&a.seated)txt=(a.task||'작업')+' '+'.'.repeat(1+Math.floor(t*2.5)%3).padEnd(3,' ');
+  else if(a.state==='error'){txt='오류!';bg='#ff6370';fg='#fff'}
+  else if(a.state==='done'&&!a.seated&&!a.path.length){txt='완료!';bg='#46d98a'}
+  else return;
+  const cx=a.x*S,cy=(a.y-21)*S;
+  pill(txt,cx,cy,{bg,fg});
+  vg.fillStyle=bg;vg.beginPath();vg.moveTo(cx-4,cy+9);vg.lineTo(cx+4,cy+9);vg.lineTo(cx,cy+14);vg.fill();
+}
+function lighting(mode,t){
+  const hsrc=[];
+  for(const a of agents)if(a.seated&&a.state==='thinking')hsrc.push([a.seat.desk.cx,a.seat.desk.y-4,'rgba(110,190,255,',34]);
+  if(mode!=='day'){
+    vg.globalCompositeOperation='multiply';vg.fillStyle=mode==='dusk'?'#ffcfa6':'#6a7ab6';vg.fillRect(0,0,view.width,view.height);
+    vg.globalCompositeOperation='lighter';
+    const k=mode==='night'?1:.45;
+    const glow=(x,y,r,col,al)=>{const gr=vg.createRadialGradient(x*S,y*S,0,x*S,y*S,r*S);gr.addColorStop(0,col+(al*k)+')');gr.addColorStop(1,col+'0)');vg.fillStyle=gr;vg.fillRect((x-r)*S,(y-r)*S,r*2*S,r*2*S)};
+    hsrc.forEach(([x,y,c,r])=>glow(x,y,r,c,.5));
+    DESK_TEAM.forEach((_,i)=>glow(DX[i%5]+10,DY[i<5?0:1]-5,15,'rgba(255,200,120,',.22));
+    glow(TV.x+TV.w/2,TV.y+8,40,'rgba(90,160,255,',.35);glow(14,16,34,'rgba(70,255,150,',.12);glow(30,16,34,'rgba(70,255,150,',.12);
+    glow(130,ORCH_DESK.y-5,30,'rgba(110,190,255,',.4);glow(297,112,18,'rgba(255,90,90,',.25);
+    vg.globalCompositeOperation='source-over';
+  }
+  const gr=vg.createRadialGradient(view.width/2,view.height/2,view.height*.45,view.width/2,view.height/2,view.width*.62);
+  gr.addColorStop(0,'rgba(0,0,0,0)');gr.addColorStop(1,'rgba(8,6,16,.32)');vg.fillStyle=gr;vg.fillRect(0,0,view.width,view.height);
+}
+function draw(t){
+  const mode=lightMode();
+  g.drawImage(bgc,0,0);drawWindows(mode,t);drawBeams(mode);drawTV(t);drawScreens(t);
+  const all=[...agents,orch].sort((p,q)=>p.y-q.y);
+  all.forEach(a=>drawAgent(a,t));
+  for(const p of parts)if(p.sq){g.globalAlpha=Math.max(0,1-p.age/p.life);R(g,p.x,p.y,1,1,p.col);g.globalAlpha=1}
+  vg.clearRect(0,0,view.width,view.height);vg.drawImage(px,0,0,W*S,H*S);
+  lighting(mode,t);
+  vg.textBaseline='middle';
+  pill('AI OPS',23*S,33*S,{size:9,bg:'rgba(10,12,18,.6)',fg:'#9fb0d0'});
+  const c=s=>agents.filter(a=>s.includes(a.state)).length;
+  pill(`작업 ${c(['thinking','tool'])} · 대기 ${c(['standby','idle','done'])} · 오류 ${c(['error'])}`,(TV.x+TV.w/2)*S,29*S,{size:9,bg:'rgba(10,12,18,.6)',fg:'#cfe0ff'});
+  pill(TEAMS.plan.name,54*S,31*S,{size:9,bg:TEAMS.plan.col,fg:'#1d1426'});
+  pill(TEAMS.res.name,145*S,31*S,{size:9,bg:TEAMS.res.col,fg:'#2a2208'});
+  pill(TEAMS.dev.name,108*S,83*S,{size:9,bg:TEAMS.dev.col,fg:'#1d1a24'});
+  pill('자료실',270*S,76*S,{size:10});pill('휴게실',270*S,176*S,{size:10});pill('결정권자 (사람)',184*S,154*S,{size:10,dot:'#d4b24c'});
+  for(const a of all){
+    if(a.id!=='orch')pill(a.name,a.x*S,(a.y+5)*S,{dot:TEAMS[a.team].col});
+    bubble(a,t);
+  }
+  for(const p of parts)if(p.txt){vg.globalAlpha=Math.max(0,1-p.age/p.life);vg.font=`bold 11px ${FONT}`;vg.textAlign='center';
+    vg.fillStyle='rgba(0,0,0,.55)';vg.fillText(p.txt,p.x*S+1,p.y*S+1);vg.fillStyle=p.col;vg.fillText(p.txt,p.x*S,p.y*S);vg.globalAlpha=1}
+}
+
+/* ---------- UI ---------- */
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STATUS={running:'작업 중',awaiting_approval:'결정 대기',approved:'승인됨',rejected:'반려됨',failed:'실패'};
+const SCOL={running:'var(--work)',awaiting_approval:'var(--acc)',approved:'var(--done)',rejected:'var(--err)',failed:'var(--err)'};
+const REASON={passed:'기준 점수를 통과했습니다',max_rounds:'라운드 상한에 도달했습니다 (기준 미달)',budget_exceeded:'예산 한도에 도달해 중단했습니다'};
+const DEC={approve:'승인',revise:'수정 요청',reject:'반려'};
+let cur=null,manual=false,lastKey='',es=null;
+
+async function api(path,body){
+  const r=await fetch(path,body===undefined?{}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(typeof j.detail==='string'?j.detail:JSON.stringify(j.detail||r.status));
+  return j;
+}
+function watch(id){
+  if(es)es.close();
+  floorReset();
+  es=new EventSource(`/api/office/runs/${encodeURIComponent(id)}/activity`);
+  es.addEventListener('activity',e=>applyActivity(JSON.parse(e.data)));
+}
+function select(id,byUser){
+  cur=id;if(byUser)manual=true;lastKey='';
+  $('opslink').href=`/ops#${encodeURIComponent(id)}`;
+  watch(id);refresh();
+}
+
+async function loadList(){
+  const runs=await api('/api/office/runs');
+  const n=s=>runs.filter(r=>r.status===s).length;
+  $('sWork').textContent=n('running');$('sPend').textContent=n('awaiting_approval');$('sDone').textContent=n('approved');
+  document.title=(n('awaiting_approval')?`(${n('awaiting_approval')}) `:'')+'AI Office';
+  if(!manual){  // follow the newest running run; otherwise the oldest waiting for a decision; otherwise newest
+    const t=runs.find(r=>r.status==='running')||runs.slice().reverse().find(r=>r.status==='awaiting_approval')||runs[0];
+    if(t&&t.run_id!==cur)select(t.run_id,false);
+  }
+  const order={awaiting_approval:0,running:1};
+  runs.sort((a,b)=>(order[a.status]??2)-(order[b.status]??2));
+  $('list').innerHTML=runs.length?runs.map(r=>`
+    <div class="item${r.run_id===cur?' sel':''}" data-id="${esc(r.run_id)}">
+      <span class="chip" style="--c:${SCOL[r.status]}">${STATUS[r.status]||r.status}</span><b>${esc(r.job||r.workflow)}</b>
+      <small>${r.score?r.score.total+'점':'채점 전'} · R${r.rounds}</small></div>`).join(''):'<div class="empty">실행 기록 없음</div>';
+}
+$('list').onclick=e=>{const el=e.target.closest('.item');if(el)select(el.dataset.id,true)};
+
+async function loadDetail(){
+  if(!cur)return;
+  const v=await api(`/api/office/runs/${encodeURIComponent(cur)}`);
+  const key=JSON.stringify(v);
+  if(key===lastKey)return;  // don't clobber the comment box while typing
+  lastKey=key;
+  const sc=v.score;
+  let h=`<div class="dh"><b>${esc(v.job||v.workflow)}</b><span class="chip" style="--c:${SCOL[v.status]}">${STATUS[v.status]||v.status}</span><span class="q">${esc(v.question)}</span></div>`;
+  if(sc)h+=`<div class="score"><b style="color:${sc.passed?'var(--done)':'var(--acc)'}">${sc.total}</b><span>/ 10 · 기준 ${sc.pass_score} ${sc.passed?'✔ 통과':'✘ 미달'} · ${v.rounds}라운드</span></div>`;
+  if(v.result)h+=`<h2>최종 결과물</h2><div class="result">${esc(v.result)}</div>`;
+  else h+=`<div class="empty">${v.status==='failed'?'오류로 결과물이 없습니다. Ops 콘솔에서 원인을 확인하세요.':'에이전트가 작업 중입니다…'}</div>`;
+  if(v.status==='awaiting_approval')h+=`<div class="note">${esc(REASON[v.stop_reason]||v.stop_reason)}. 확정은 사람만 할 수 있습니다.</div>
+    <textarea id="comment" placeholder="수정 요청 / 반려 사유"></textarea>
+    <div class="btns"><button class="ok" data-d="approve">승인</button><button class="warn" data-d="revise">수정 요청</button><button class="bad" data-d="reject">반려</button></div><div id="derr" class="errtxt"></div>`;
+  else if(v.status==='running')h+=`<div class="note">작업이 끝나면 여기서 결정할 수 있습니다.</div>`;
+  if(v.decisions.length)h+=`<h2 style="margin-top:14px">결정 이력</h2><ul class="hist">${v.decisions.map(d=>
+    `<li><time>${new Date(d.ts).toLocaleString('ko-KR')}</time><b>${DEC[d.decision]}</b> (${esc(d.actor)})${d.comment?' — '+esc(d.comment):''}</li>`).join('')}</ul>`;
+  $('detail').innerHTML=h;
+}
+$('detail').onclick=async e=>{
+  const d=e.target.dataset.d;if(!d)return;
+  const btns=$('detail').querySelectorAll('button');btns.forEach(b=>b.disabled=true);
+  try{await api(`/api/office/runs/${encodeURIComponent(cur)}/decision`,{decision:d,comment:$('comment').value});lastKey='';refresh()}
+  catch(err){$('derr').textContent=err.message;btns.forEach(b=>b.disabled=false)}
+};
+function refresh(){loadList().catch(()=>{});loadDetail().catch(()=>{})}
+
+const cycleLight=()=>{lightIdx=(lightIdx+1)%LIGHTS.length;$('lightLbl').textContent=LIGHTS[lightIdx][1]};
+$('light').onclick=cycleLight;
+addEventListener('keydown',e=>{if(e.target.closest('textarea,input'))return;if(e.key==='l'||e.key==='L')cycleLight()});
+view.onclick=null;
+
+/* ---------- 루프 ---------- */
+let last=performance.now();
+function frame(ts){
+  const real=Math.min(.1,(ts-last)/1000);last=ts;
+  update(real*1.6);
+  draw(ts/1000);
+  requestAnimationFrame(frame);
+}
+$('legend').innerHTML=Object.values(TEAMS).map(m=>`<span><i style="--c:${m.col}"></i>${m.name}</span>`).join('')+'<span><i style="--c:#d4b24c"></i>결정권자 (사람)</span>';
+function fromHash(){if(location.hash.length>1)select(decodeURIComponent(location.hash.slice(1)),true);else refresh()}
+addEventListener('hashchange',fromHash);
+fromHash();
+setInterval(refresh,1500);
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
