@@ -2,7 +2,7 @@
 
 Environment (never stored in the repo or in run records):
   H_CHAT_API_KEY      required
-  H_CHAT_BASE_URL     required - the full Claude messages endpoint of your gateway
+  H_CHAT_BASE_URL     required - gateway base (".../api/v3") or the full ".../claude/messages" endpoint
   H_CHAT_PROJECT_ID   optional - sent as X-Project-Id
   H_CHAT_AUTH_PREFIX  optional - default "Bearer ". Set it to empty if you get 401 (docs differ on this)
 
@@ -39,7 +39,9 @@ class HChatClient:
         self._max_tokens = cfg.max_tokens
         self._retries = cfg.max_retries
         self._sleep = sleep
-        self._url = env["H_CHAT_BASE_URL"]
+        url = env["H_CHAT_BASE_URL"].rstrip("/")
+        # accept either the gateway base (".../api/v3", as SDKs use) or the full messages endpoint
+        self._url = url if url.endswith("/messages") else url + "/claude/messages"
         self._headers = {"Content-Type": "application/json",
                          "Authorization": f"{env.get('H_CHAT_AUTH_PREFIX', 'Bearer ')}{env['H_CHAT_API_KEY']}"}
         if env.get("H_CHAT_PROJECT_ID"):

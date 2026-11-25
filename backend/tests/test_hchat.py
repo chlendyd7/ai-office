@@ -52,6 +52,17 @@ def test_request_shape_and_response_parsing():
     assert b["messages"] == [{"role": "user", "content": "hi"}] and b["system"]
 
 
+@pytest.mark.parametrize("configured, expected", [
+    ("https://gw.example/api/v3", "https://gw.example/api/v3/claude/messages"),  # SDK-style base (what a real .env had)
+    ("https://gw.example/api/v3/", "https://gw.example/api/v3/claude/messages"),
+    ("https://gw.example/api/v3/claude/messages", "https://gw.example/api/v3/claude/messages"),  # full endpoint kept
+])
+def test_base_url_or_full_endpoint_both_work(configured, expected):
+    seen = {}
+    call(client(lambda req: (seen.update(url=str(req.url)), reply("x"))[1], env=ENV | {"H_CHAT_BASE_URL": configured}))
+    assert seen["url"] == expected
+
+
 def test_auth_prefix_and_project_header_are_configurable():
     seen = {}
     env = {k: v for k, v in ENV.items() if k != "H_CHAT_PROJECT_ID"} | {"H_CHAT_AUTH_PREFIX": ""}
