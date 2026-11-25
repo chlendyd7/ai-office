@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..core.config import LLMConfig, deep_merge
 from ..core.engine import Engine, GateError
 from ..core.env import load_env_file
+from ..core.pricing import load_prices, read_pricing_file
 from ..core.store import RunStore
 from ..core.summary import summarize
 from ..llm.hchat import HChatClient
@@ -23,6 +24,7 @@ from ..workflows import REGISTRY
 
 BACKEND = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).parent / "static"
+PRICING_FILE = BACKEND / "pricing.json"
 
 
 class StartReq(BaseModel):
@@ -50,7 +52,7 @@ def _sse(name: str, data) -> str:
 
 
 def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = None) -> FastAPI:
-    eng = engine or Engine(RunStore(runs_dir), REGISTRY)
+    eng = engine or Engine(RunStore(runs_dir), REGISTRY, prices=load_prices(PRICING_FILE))
     store = eng.store
     app = FastAPI(title="AI Ops")
 
@@ -115,6 +117,10 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
     def office_decide(run_id: str, req: DecisionReq):
         decide(run_id, DecisionReq(decision=req.decision, comment=req.comment, actor="office"))
         return office_view(summarize(store.read(run_id)))
+
+    @app.get("/api/pricing")
+    def pricing():
+        return read_pricing_file(PRICING_FILE)
 
     # ---- LLM connectivity (values of secrets are never returned) ----
     @app.get("/api/llm/status")

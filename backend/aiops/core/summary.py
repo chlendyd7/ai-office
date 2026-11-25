@@ -29,7 +29,7 @@ def derive_status(events: list[dict]) -> str:
 def summarize(events: list[dict]) -> dict:
     started = events[0]
     cfg = started["config"]
-    total, by_agent, by_round = _bucket(), {}, {}
+    total, by_agent, by_round, by_model = _bucket(), {}, {}, {}
     scores, decisions = [], []
     stop_reason = result = error = None
     failed_calls = 0
@@ -41,6 +41,7 @@ def summarize(events: list[dict]) -> dict:
             _add(total, e)
             _add(by_agent.setdefault(e["agent"], _bucket()), e)
             _add(by_round.setdefault(e["round"], _bucket()), e)
+            _add(by_model.setdefault(e["model"], _bucket()), e)
         elif t == "score":
             scores.append({"round": e["round"], "total": e["total"], "passed": e["passed"], "criteria": e["criteria"]})
         elif t == "loop_stopped":
@@ -64,6 +65,7 @@ def summarize(events: list[dict]) -> dict:
         "failed_calls": failed_calls,
         "by_agent": by_agent,
         "by_round": by_round,
+        "by_model": by_model,
         "scores": scores,
         "decisions": decisions,
         "rounds": max(by_round, default=0),

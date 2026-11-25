@@ -21,10 +21,12 @@ class GateError(Exception):
 
 
 class Engine:
-    def __init__(self, store: RunStore, workflows: dict[str, Workflow], llm_factory: Callable = make_llm):
+    def __init__(self, store: RunStore, workflows: dict[str, Workflow], llm_factory: Callable = make_llm,
+                 prices: dict[str, dict] | None = None):
         self.store = store
         self.workflows = workflows
         self.llm_factory = llm_factory
+        self.prices = prices or {}  # verified per-model prices; become part of each run's config snapshot
 
     def start(self, workflow: str, input: dict, overrides: dict | None = None) -> str:
         run_id = self.create(workflow, input, overrides)
@@ -34,7 +36,8 @@ class Engine:
     def create(self, workflow: str, input: dict, overrides: dict | None = None, parent: str | None = None) -> str:
         """Record the run (config snapshot + input) without running it. Lets callers run the first pass in background."""
         wf = self.workflows[workflow]
-        cfg = RunConfig.model_validate(deep_merge(wf.default_config(), overrides or {}))
+        base = deep_merge({"pricing_models": self.prices}, wf.default_config())
+        cfg = RunConfig.model_validate(deep_merge(base, overrides or {}))
         self.llm_factory(cfg.llm)  # fail fast on a bad llm config, before anything is recorded
         run_id = self.store.new_run_id()
         self.store.append(run_id, "run_started", run_id=run_id, workflow=workflow, config=cfg.model_dump(), input=input,

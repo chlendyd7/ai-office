@@ -98,6 +98,7 @@ svg text{fill:var(--muted);font-size:10px}
           <div><label>리뷰어 입력</label><input id="f-rpi" type="number" step="0.01" min="0"></div>
           <div><label>리뷰어 출력</label><input id="f-rpo" type="number" step="0.01" min="0"></div>
         </div>
+        <div id="price-note" class="muted" style="font-size:12px;margin-top:6px"></div>
         <p style="margin:8px 0 0"><button class="ghost" id="b-test" type="button">연결 테스트</button> <span id="llm-status" class="muted"></span></p>
       </div>
       <label>지원 직무</label><input id="f-job" value="데이터 엔지니어">
@@ -329,6 +330,8 @@ async function refreshLLM() {
   if (!real) return;
   const s = (await api('/api/llm/status')).hchat;
   $('#llm-status').innerHTML = s.configured ? '환경변수 OK' : `<span class="err">환경변수 누락: ${esc(s.missing.join(', '))}</span>`;
+  const ms = Object.entries((await api('/api/pricing')).models || {});
+  $('#price-note').textContent = ms.length ? '확인된 단가 (USD/100만, 입력/출력): ' + ms.map(([m, p]) => `${m} ${p.in_per_1m}/${p.out_per_1m}`).join(' · ') + ' — 칸을 비우면 이 값이 적용됨' : '';
 }
 $('#f-mode').onchange = () => refreshLLM().catch(() => {});
 $('#b-test').onclick = async () => {
@@ -459,6 +462,8 @@ function renderRight() {
   $('#tok').innerHTML = `<table>${head}${Object.entries(s.by_agent).map(([k, b]) => row(k === 'writer' ? '작성자' : k === 'reviewer' ? '리뷰어' : k, b)).join('')}${row('합계', s.totals)}</table>
     <div class="muted" style="margin:8px 0 2px;font-size:12px">라운드별</div>
     <table>${head}${Object.entries(s.by_round).map(([k, b]) => row('R' + k, b)).join('')}</table>
+    <div class="muted" style="margin:8px 0 2px;font-size:12px">모델별 (게이트웨이 사용량 화면과 대조용)</div>
+    <table>${head}${Object.entries(s.by_model || {}).map(([k, b]) => row(k, b)).join('')}</table>
     <div class="muted" style="margin-top:6px;font-size:11px">비용은 설정 단가 기준 추정치이며 실제 청구액과 다를 수 있음. 가짜 LLM 토큰은 글자 수 기반 추정.</div>`;
 
   renderResult();
@@ -495,6 +500,8 @@ function diff(a, b) { // word-level LCS diff
 
 function renderCfg() {
   const c = events[0]?.config; if (!c) return;
+  const used = [...new Set([c.llm.model, c.llm.models?.reviewer || c.llm.model])];
+  const missingPrice = c.llm.mode === 'fake' ? [] : used.filter(m => !(m in (c.pricing_models || {})));
   $('#cfg').innerHTML = `<h3>설정 스냅샷 (이 run)</h3><div class="kv">
     <span>통과 점수</span><span>${c.pass_score}</span><span>라운드 상한(패스당)</span><span>${c.max_rounds}</span>
     <span>예산</span><span>$${c.budget_usd}</span><span>LLM</span><span>${esc(c.llm.mode)} / ${esc(c.llm.model)}</span>
@@ -502,8 +509,8 @@ function renderCfg() {
     <span>최대 토큰/호출</span><span>${c.llm.max_tokens ?? '-'}</span>
     ${c.llm.mode === 'fake' ? `<span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span>`
       : `<span>모델</span><span>${esc(c.llm.model)} (리뷰어: ${esc(c.llm.models.reviewer || c.llm.model)})</span>
-         <span>모델별 단가(1k)</span><span>${Object.keys(c.pricing_models || {}).length ? esc(JSON.stringify(c.pricing_models))
-           : '<span class="err">미지정 → 기본 단가로 추정 (실제와 다를 수 있음)</span>'}</span>`}
+         <span>모델별 단가(1k)</span><span>${esc(JSON.stringify(c.pricing_models || {}))}${missingPrice.length
+           ? ` <span class="err">⚠ ${esc(missingPrice.join(', '))}: 단가 미확인 → 기본 단가로 추정</span>` : ''}</span>`}
     ${summary?.parent ? `<span>재실행 원본</span><span><a href="#${esc(summary.parent)}" style="color:var(--accent)">${esc(summary.parent)}</a></span>` : ''}</div>
     <p style="margin:10px 0 0"><button class="ghost" id="b-rerun">같은 설정으로 다시 실행</button>
       <button class="ghost" id="b-load" title="이 run의 입력과 설정을 새 실행 폼에 채워 넣고, 바꿔서 실행해 비교">폼으로 불러오기</button></p>

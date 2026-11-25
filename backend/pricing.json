@@ -1,0 +1,9 @@
+{
+  "_note": "USD per 1M tokens. Only models whose price was verified are listed; others fall back to the default estimate and are flagged in the Ops settings card.",
+  "_source": "derived from the gateway usage dashboard (cost / tokens), 2026-11-26; reproduced exactly for claude-sonnet-5 (1272 in / 550 out = $0.008044) and claude-haiku-4-5 (14 in / 4 out = $0.000034)",
+  "models": {
+    "claude-haiku-4-5": { "in_per_1m": 1.0, "out_per_1m": 5.0 },
+    "claude-sonnet-5": { "in_per_1m": 2.0, "out_per_1m": 10.0 },
+    "claude-sonnet-5-5": { "in_per_1m": 2.0, "out_per_1m": 10.0 }
+  }
+}
