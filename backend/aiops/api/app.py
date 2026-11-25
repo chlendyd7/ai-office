@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..core.config import LLMConfig, deep_merge
 from ..core.engine import Engine, GateError
 from ..core.env import load_env_file
+from ..core.jobqueue import JobQueue, Worker
 from ..core.pricing import load_prices, read_pricing_file
 from ..core.store import RunStore
 from ..core.summary import summarize
@@ -51,10 +52,34 @@ def _sse(name: str, data) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = None) -> FastAPI:
+class JobIn(BaseModel):
+    workflow: str = "cover_letter"
+    input: dict
+    overrides: dict = Field(default_factory=dict)
+
+
+class EnqueueReq(BaseModel):
+    jobs: list[JobIn] = Field(min_length=1, max_length=200)
+
+
+class ControlReq(BaseModel):
+    action: str  # "start" (fresh budget) | "resume" (same session after a manual pause) | "pause"
+    budget_usd: float | None = None
+    max_pending: int | None = None
+    concurrency: int | None = None
+
+
+def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = None, queue_path: str | Path | None = None,
+               start_worker: bool = False, worker_interval: float = 0.5) -> FastAPI:
     eng = engine or Engine(RunStore(runs_dir), REGISTRY, prices=load_prices(PRICING_FILE))
     store = eng.store
+    eng.recover_interrupted()  # runs left "running" by a previous process would block the Office and the queue forever
+    queue = JobQueue(queue_path or f"{str(runs_dir).rstrip('/' + chr(92))}_queue.jsonl")
+    worker = Worker(eng, queue, interval=worker_interval)  # always starts paused, even if jobs are queued
+    if start_worker:
+        worker.start_thread()
     app = FastAPI(title="AI Ops")
+    app.state.worker, app.state.queue = worker, queue
 
     def events_or_404(run_id: str) -> list[dict]:
         try:
@@ -118,6 +143,57 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
     def office_decide(run_id: str, req: DecisionReq):
         decide(run_id, DecisionReq(decision=req.decision, comment=req.comment, actor="office"))
         return office_view(summarize(store.read(run_id)))
+
+    # ---- continuous operation (queue) ----
+    @app.get("/api/queue/status")
+    def queue_status():
+        return worker.status()
+
+    @app.get("/api/queue")
+    def queue_list():
+        jobs = queue.jobs()
+        queued = [j for j in jobs if j["status"] == "queued"]
+        rest = [j for j in jobs if j["status"] != "queued"][-30:]
+        return {"control": worker.status(), "jobs": queued + list(reversed(rest))}
+
+    @app.post("/api/queue")
+    def queue_add(req: EnqueueReq):
+        for i, j in enumerate(req.jobs, 1):  # validate everything first: all or nothing, and fail before any money is at stake
+            try:
+                eng.validate(j.workflow, j.overrides)
+            except KeyError:
+                raise HTTPException(400, f"job {i}: unknown workflow {j.workflow!r}")
+            except (ValidationError, ValueError) as e:
+                raise HTTPException(400, f"job {i}: {e}")
+        return {"job_ids": queue.enqueue([j.model_dump() for j in req.jobs])}
+
+    @app.post("/api/queue/control")
+    def queue_control(req: ControlReq):
+        if req.action == "start":
+            try:
+                worker.start(budget_usd=req.budget_usd, max_pending=req.max_pending, concurrency=req.concurrency)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        elif req.action == "resume":
+            try:
+                worker.resume()
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+        elif req.action == "pause":
+            worker.pause()
+        else:
+            raise HTTPException(400, "action must be 'start', 'resume' or 'pause'")
+        return worker.status()
+
+    @app.post("/api/queue/clear")
+    def queue_clear():
+        return {"cancelled": queue.cancel_all()}
+
+    @app.post("/api/queue/{job_id}/cancel")
+    def queue_cancel(job_id: str):
+        if not queue.cancel(job_id):
+            raise HTTPException(404, "no such queued job")
+        return {"ok": True}
 
     @app.get("/api/pricing")
     def pricing():
@@ -207,4 +283,4 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
 
 
 load_env_file(BACKEND / ".env")  # optional local file (git-ignored); real environment variables win
-app = create_app()
+app = create_app(start_worker=True)

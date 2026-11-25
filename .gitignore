@@ -8,6 +8,7 @@
 # backend
 backend/.venv/
 backend/runs/
+backend/runs_queue.jsonl
 backend/.env
 __pycache__/
 .pytest_cache/

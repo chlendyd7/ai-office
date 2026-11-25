@@ -69,6 +69,8 @@ svg text{fill:var(--muted);font-size:10px}
 .run{display:flex;gap:8px;align-items:flex-start}
 .run input{width:auto;margin-top:4px}
 .cmpt{margin-bottom:10px}
+.qj{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;padding:3px 0;border-bottom:1px dashed var(--line);font-size:13px}
+.qj .qx{margin-left:auto;padding:0 8px}
 .rb{display:grid;grid-template-columns:1fr 62px 30px;gap:4px;margin-top:6px}
 .rb .rb-d{grid-column:1/4;font-size:12px}
 .rb button{padding:2px 0}
@@ -118,6 +120,26 @@ svg text{fill:var(--muted);font-size:10px}
       </details>
       <div id="w-scn"><label>가짜 리뷰어 점수 시나리오 (쉼표)</label><input id="f-scn" value="5,7,9"></div>
       <p style="margin:10px 0 0"><button id="b-start">실행</button> <span id="start-err" class="err"></span></p>
+    </div>
+    <div class="card" id="qcard">
+      <h3>연속 운영 (큐)</h3>
+      <div style="margin-bottom:6px"><span id="q-state" class="badge">⏸ 정지</span></div>
+      <div id="q-info" class="muted" style="font-size:12px">-</div>
+      <div class="meter" style="width:100%;margin:6px 0"><i id="q-bar" style="width:0"></i></div>
+      <div class="row">
+        <div><label>이번 운영 예산 (USD)</label><input id="q-budget" type="number" step="0.05" min="0.01" value="1"></div>
+        <div><label>승인 대기 상한</label><input id="q-pend" type="number" min="1" value="3"></div>
+      </div>
+      <p style="margin:8px 0 0"><button id="q-start">▶ 시작</button> <button class="ghost" id="q-pause">⏸ 일시정지</button>
+        <span id="q-ctl-err" class="err"></span></p>
+      <details style="margin-top:10px" open>
+        <summary class="muted" style="cursor:pointer">작업 추가 (여러 건은 <code>---</code> 줄로 구분)</summary>
+        <textarea id="q-batch" style="min-height:120px" placeholder="직무: 데이터 엔지니어&#10;문항: 지원동기를 작성하세요&#10;저는 데이터에 관심이 많아 지원했습니다...&#10;---&#10;직무: 백엔드 개발자&#10;문항: 성장 경험&#10;초안 본문..."></textarea>
+        <p style="margin:6px 0 0"><button class="ghost" id="q-add" type="button">큐에 추가</button>
+          <button class="ghost" id="q-add-form" type="button">위 폼 내용 1건 추가</button> <span id="q-err" class="err"></span></p>
+        <div class="muted" style="font-size:11px;margin-top:4px">LLM·루브릭·예산·통과 점수는 위 "새 실행" 폼의 설정이 모든 작업에 적용됩니다.</div>
+      </details>
+      <div id="q-list" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h3>실행 이력 <button class="ghost" id="b-compare" disabled style="float:right;padding:2px 10px;font-size:12px">비교 (0/2)</button></h3>
@@ -360,6 +382,70 @@ $('#b-start').onclick = async () => {
   } catch (e) { $('#start-err').textContent = e.message; }
 };
 
+/* ---------- continuous operation (queue) ---------- */
+const Q_REASON = {paused: '정지', idle: '대기 중 (큐 비어 있음)', working: '실행 중', backpressure: '승인 대기 상한 도달 — 결정이 필요합니다',
+                  budget: '운영 예산 소진으로 정지', failures: '연속 실패로 정지'};
+const Q_JOB = {queued: '대기', started: '시작됨', cancelled: '취소', start_failed: '시작 실패'};
+function parseBatch(text) {  // blocks separated by '---'; "직무:" / "문항:" lines at the top, the rest is the draft
+  return text.split(/^\s*---\s*$/m).map(b => b.trim()).filter(Boolean).map(b => {
+    let job = '', question = ''; const rest = [];
+    for (const l of b.split('\n')) {
+      const m = !rest.length && l.match(/^(직무|문항)\s*[:：]\s*(.*)$/);
+      if (m) { if (m[1] === '직무') job = m[2].trim(); else question = m[2].trim(); } else rest.push(l);
+    }
+    return {job, question, draft: rest.join('\n').trim()};
+  });
+}
+const scnValues = () => $('#f-scn').value.split(',').map(parseFloat).filter(x => !isNaN(x));
+function jobFromInput(input) { return {workflow: 'cover_letter', input, overrides: buildOverrides(scnValues())}; }
+async function enqueue(inputs) {
+  $('#q-err').textContent = '';
+  const re = rubricError(); if (re) { $('#q-err').textContent = re; return; }
+  try {
+    await api('/api/queue', {jobs: inputs.map(jobFromInput)});
+    $('#q-batch').value = ''; loadQueue();
+  } catch (e) { $('#q-err').textContent = e.message; }
+}
+$('#q-add').onclick = () => {
+  const items = parseBatch($('#q-batch').value);
+  if (!items.length) { $('#q-err').textContent = '추가할 작업이 없습니다'; return; }
+  const bad = items.findIndex(x => !x.job);
+  if (bad >= 0) { $('#q-err').textContent = `${bad + 1}번째 작업에 "직무:" 줄이 없습니다`; return; }
+  enqueue(items);
+};
+$('#q-add-form').onclick = () => enqueue([{job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value}]);
+let qState = null;
+async function loadQueue() {
+  const {control: c, jobs} = await api('/api/queue'); qState = {c, jobs};
+  const st = $('#q-state');
+  st.textContent = c.enabled ? '▶ ' + (Q_REASON[c.reason] || c.reason) : '⏸ ' + (Q_REASON[c.reason] || '정지');
+  st.className = 'badge ' + (c.enabled ? (c.reason === 'backpressure' ? 's-awaiting_approval' : 's-running') : (c.reason === 'budget' || c.reason === 'failures' ? 's-failed' : ''));
+  const pct = Math.min(100, c.spent_usd / c.settings.budget_usd * 100);
+  $('#q-info').textContent = `예산 $${c.spent_usd.toFixed(4)} / $${c.settings.budget_usd} · 대기 ${c.queued} · 실행 ${c.running} · 승인 대기 ${c.pending_approvals} (상한 ${c.settings.max_pending}) · 이번 운영 ${c.started}건 시작`;
+  $('#q-bar').style.width = pct + '%'; $('#q-bar').parentElement.classList.toggle('hot', pct >= 100);
+  $('#q-list').innerHTML = jobs.length ? jobs.slice(0, 14).map(j => `
+    <div class="qj"><span class="badge ${j.status === 'queued' ? '' : j.status === 'started' ? 's-running' : 's-failed'}">${Q_JOB[j.status]}</span>
+      ${esc(j.input.job || j.workflow)}${j.overrides?.llm?.mode === 'hchat' ? ' <small class="muted">· 실제 LLM</small>' : ''}
+      ${j.run_id ? `<a href="#${esc(j.run_id)}" class="muted">${esc(j.run_id.slice(-6))}</a>` : ''}
+      ${j.status === 'queued' ? `<button class="ghost qx" data-id="${esc(j.job_id)}" title="취소">✕</button>` : ''}
+      ${j.error ? `<div class="err" style="font-size:11px">${esc(j.error)}</div>` : ''}</div>`).join('')
+    + (c.queued ? '<p style="margin:6px 0 0"><button class="ghost" id="q-clear" style="font-size:12px;padding:2px 8px">대기 작업 모두 취소</button></p>' : '')
+    : '<div class="muted" style="font-size:12px">큐가 비어 있습니다</div>';
+}
+$('#q-list').onclick = async e => {
+  const x = e.target.closest('.qx'); if (x) { await api(`/api/queue/${x.dataset.id}/cancel`, {}); loadQueue(); }
+  if (e.target.id === 'q-clear') { await api('/api/queue/clear', {}); loadQueue(); }
+};
+$('#q-start').onclick = async () => {
+  $('#q-ctl-err').textContent = '';
+  const real = (qState?.jobs || []).filter(j => j.status === 'queued' && j.overrides?.llm?.mode === 'hchat').length;
+  const b = +$('#q-budget').value;
+  if (real && !confirm(`대기 중인 작업 중 실제 LLM 호출이 ${real}건 있습니다.\n예산 $${b} 안에서 멈춤 없이 자동으로 계속 실행합니다(승인 대기 상한 ${$('#q-pend').value}건, 연속 실패 3회 시 자동 정지).\n시작할까요?`)) return;
+  try { await api('/api/queue/control', {action: 'start', budget_usd: b, max_pending: +$('#q-pend').value}); loadQueue(); }
+  catch (e) { $('#q-ctl-err').textContent = e.message; }
+};
+$('#q-pause').onclick = async () => { await api('/api/queue/control', {action: 'pause'}); loadQueue(); };
+
 /* ---------- render ---------- */
 function render() {
   renderTop(); renderGate(); renderTimeline(); renderRight(); renderCfg();
@@ -521,8 +607,8 @@ function renderCfg() {
 addEventListener('keydown', e => {
   if (e.key === 'Escape' && window.parent !== window && !e.target.closest('textarea,input,select')) parent.postMessage({aiops: 'close'}, location.origin);
 });
-loadRuns();
-setInterval(loadRuns, 4000);
+loadRuns(); loadQueue().catch(() => {});
+setInterval(loadRuns, 4000); setInterval(() => loadQueue().catch(() => {}), 2000);
 function fromHash() { if (location.hash.length > 1) select(decodeURIComponent(location.hash.slice(1))); }  // deep link: /ops#<run_id>
 addEventListener('hashchange', fromHash);
 fromHash();

@@ -93,6 +93,8 @@ textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:v
   </div>
   <div class="ctl">
     <button id="light" title="시간대 변경">시간대 <b id="lightLbl">낮</b><kbd>L</kbd></button>
+    <span id="qchip" class="stat" style="cursor:pointer" title="연속 운영 상태 (클릭: AI Ops 팝업에서 큐 관리)"><i style="--c:#8e98b0"></i><b id="qtxt" style="font-size:13px">연속 운영: 꺼짐</b></span>
+    <button id="qtoggle" hidden></button>
     <button id="opsbtn" title="프롬프트·응답 전문, 설정, 비교, 새 실행 등 (팝업)">AI Ops</button>
   </div>
 </header>
@@ -497,6 +499,25 @@ function openOps(runId){
 }
 function closeOps(){$('modal').hidden=true;$('mframe').src='about:blank'}
 $('opsbtn').onclick=()=>openOps(cur);
+
+/* continuous operation: status chip + kill switch. Starting (and any restart after a budget/failure stop) happens in AI Ops */
+const Q_NAME={paused:'정지',idle:'대기',working:'실행 중',backpressure:'결정 필요!',budget:'예산 소진',failures:'연속 실패'};
+let qc=null;
+async function loadQueue(){
+  qc=await api('/api/queue/status');
+  $('qtxt').textContent=`연속 운영: ${qc.enabled?'▶ ':'⏸ '}${Q_NAME[qc.reason]||qc.reason} · 대기 ${qc.queued}`;
+  const col=qc.enabled?(qc.reason==='backpressure'?'#ffcf5c':'#4aa3ff'):(qc.reason==='budget'||qc.reason==='failures'?'#ff6370':'#8e98b0');
+  $('qchip').querySelector('i').style.setProperty('--c',col);
+  const t=$('qtoggle');
+  if(qc.enabled){t.hidden=false;t.textContent='⏸ 일시정지';t.title='새 작업 시작을 멈춤 (진행 중인 작업은 끝까지 진행)'}
+  else if(qc.configured&&qc.reason==='paused'){t.hidden=false;t.textContent='▶ 재개';t.title='같은 운영 세션(예산 누적)을 이어서 실행'}
+  else t.hidden=true;  // never started, or stopped by budget/failures: restart in AI Ops with an explicit budget
+}
+$('qtoggle').onclick=async()=>{
+  try{await api('/api/queue/control',{action:qc.enabled?'pause':'resume'})}catch(e){alert(e.message)}
+  loadQueue().catch(()=>{});
+};
+$('qchip').onclick=()=>openOps(cur);
 $('mclose').onclick=closeOps;
 $('modal').onclick=e=>{if(e.target.id==='modal')closeOps()};
 addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('modal').hidden)closeOps()});
@@ -509,7 +530,7 @@ $('detail').onclick=async e=>{
   try{await api(`/api/office/runs/${encodeURIComponent(cur)}/decision`,{decision:d,comment:$('comment').value});lastKey='';refresh()}
   catch(err){$('derr').textContent=err.message;btns.forEach(b=>b.disabled=false)}
 };
-function refresh(){loadList().catch(()=>{});loadDetail().catch(()=>{})}
+function refresh(){loadList().catch(()=>{});loadDetail().catch(()=>{});loadQueue().catch(()=>{})}
 
 const cycleLight=()=>{lightIdx=(lightIdx+1)%LIGHTS.length;$('lightLbl').textContent=LIGHTS[lightIdx][1]};
 $('light').onclick=cycleLight;

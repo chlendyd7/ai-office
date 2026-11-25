@@ -28,6 +28,25 @@ class Engine:
         self.llm_factory = llm_factory
         self.prices = prices or {}  # verified per-model prices; become part of each run's config snapshot
 
+    def validate(self, workflow: str, overrides: dict | None = None) -> RunConfig:
+        """Resolve the final config and fail fast (bad rubric, unknown mode, missing env) before anything is recorded."""
+        wf = self.workflows[workflow]  # KeyError: unknown workflow
+        base = deep_merge({"pricing_models": self.prices}, wf.default_config())
+        cfg = RunConfig.model_validate(deep_merge(base, overrides or {}))
+        self.llm_factory(cfg.llm)
+        return cfg
+
+    def recover_interrupted(self) -> list[str]:
+        """Call once at process start: a run still marked "running" has no live thread, so the process that ran it died.
+        Close it as failed instead of leaving a zombie that blocks the queue and the Office."""
+        fixed = []
+        for rid in self.store.list_runs():
+            if derive_status(self.store.read(rid)) == "running":
+                self.store.append(rid, "error", message="InterruptedError: the server stopped while this run was in progress")
+                self.store.append(rid, "run_finished", status="failed", reason="interrupted")
+                fixed.append(rid)
+        return fixed
+
     def start(self, workflow: str, input: dict, overrides: dict | None = None) -> str:
         run_id = self.create(workflow, input, overrides)
         self.run_pass(run_id, feedback=None)
@@ -35,10 +54,7 @@ class Engine:
 
     def create(self, workflow: str, input: dict, overrides: dict | None = None, parent: str | None = None) -> str:
         """Record the run (config snapshot + input) without running it. Lets callers run the first pass in background."""
-        wf = self.workflows[workflow]
-        base = deep_merge({"pricing_models": self.prices}, wf.default_config())
-        cfg = RunConfig.model_validate(deep_merge(base, overrides or {}))
-        self.llm_factory(cfg.llm)  # fail fast on a bad llm config, before anything is recorded
+        cfg = self.validate(workflow, overrides)
         run_id = self.store.new_run_id()
         self.store.append(run_id, "run_started", run_id=run_id, workflow=workflow, config=cfg.model_dump(), input=input,
                           parent=parent)  # parent: the run this one re-executes (None for a fresh run)
