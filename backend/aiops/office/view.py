@@ -1,5 +1,5 @@
-"""What the Office surface may see: status, final result, final score, decisions, and who is doing what.
-No prompts, responses, tokens or cost."""
+"""What the Office surface may see: status, final result, final score, decisions, usage totals (tokens, cost,
+budget) and who is doing what. Never prompts or responses: that detail lives in AI Ops (the popup)."""
 from __future__ import annotations
 
 
@@ -18,6 +18,14 @@ def office_view(s: dict) -> dict:
         "score": {"total": last["total"], "pass_score": s["pass_score"], "passed": last["passed"]} if last else None,
         "rounds": s["rounds"],
         "decisions": s["decisions"],
+        "usage": {
+            "tokens_in": s["totals"]["tokens_in"],
+            "tokens_out": s["totals"]["tokens_out"],
+            "cost_usd": s["totals"]["cost_usd"],
+            "budget_usd": s["budget_usd"],
+            "calls": s["totals"]["calls"],
+            "failed_calls": s["failed_calls"],
+        },
     }
 
 

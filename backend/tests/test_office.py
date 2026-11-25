@@ -1,6 +1,7 @@
 import json
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from aiops.api.app import create_app
@@ -76,6 +77,22 @@ def test_no_score_or_draft_shown_while_running(tmp_path):
     assert v["status"] == "running" and v["score"] is None and v["result"] is None
 
 
+def summarize_cost(client, rid):
+    return client.get(f"/api/runs/{rid}").json()["summary"]["totals"]["cost_usd"]
+
+
+def test_office_shows_usage_even_while_running(tmp_path):
+    from aiops.core.summary import summarize
+    from aiops.office.view import office_view
+
+    eng = Engine(RunStore(tmp_path), REGISTRY)
+    ev = eng.store.read(eng.start("cover_letter", INPUT))
+    mid = ev[: next(i for i, e in enumerate(ev) if e["type"] == "score") + 1]
+    v = office_view(summarize(mid))
+    assert v["status"] == "running" and v["score"] is None and v["result"] is None  # still hidden
+    assert v["usage"]["calls"] == 2 and v["usage"]["tokens_in"] > 0  # but spend so far is visible
+
+
 def test_office_api_hides_process_data_and_decides(tmp_path):
     client = TestClient(create_app(tmp_path))
     rid = client.post("/api/runs", json={"workflow": "cover_letter", "input": INPUT}).json()["run_id"]
@@ -84,9 +101,15 @@ def test_office_api_hides_process_data_and_decides(tmp_path):
         assert time.time() < end
         time.sleep(0.05)
     v = client.get(f"/api/office/runs/{rid}").json()
-    assert set(v) == {"run_id", "workflow", "status", "stop_reason", "error", "job", "question", "result", "score", "rounds", "decisions"}
+    assert set(v) == {"run_id", "workflow", "status", "stop_reason", "error", "job", "question", "result", "score", "rounds",
+                      "decisions", "usage"}
     assert v["score"] == {"total": 9.0, "pass_score": 8.0, "passed": True} and v["result"]
-    assert "tokens" not in str(client.get("/api/office/runs").json()) and "cost" not in str(v)
+    u = v["usage"]  # usage totals are visible in Office; the full text of prompts/responses is not
+    assert u["tokens_in"] > 0 and u["tokens_out"] > 0 and u["calls"] == 6 and u["budget_usd"] == 0.5 and u["failed_calls"] == 0
+    assert u["cost_usd"] == pytest.approx(summarize_cost(client, rid))
+    lst = client.get("/api/office/runs").json()[0]
+    assert lst["tokens"] == u["tokens_in"] + u["tokens_out"] and lst["cost_usd"] == u["cost_usd"]
+    assert not ({"prompt", "response", "events", "input", "config"} & set(v))  # no process records, only the result + totals
 
     assert client.post(f"/api/office/runs/{rid}/decision", json={"decision": "revise", "comment": ""}).status_code == 400
     v = client.post(f"/api/office/runs/{rid}/decision", json={"decision": "approve", "actor": "spoofed"}).json()

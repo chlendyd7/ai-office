@@ -100,7 +100,8 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
     @app.get("/api/office/runs")
     def office_runs():
         views = [office_view(summarize(store.read(rid))) for rid in reversed(store.list_runs())]
-        return [{k: v[k] for k in ("run_id", "workflow", "status", "stop_reason", "job", "score", "rounds")} for v in views]
+        return [{**{k: v[k] for k in ("run_id", "workflow", "status", "stop_reason", "job", "score", "rounds")},
+                 "tokens": v["usage"]["tokens_in"] + v["usage"]["tokens_out"], "cost_usd": v["usage"]["cost_usd"]} for v in views]
 
     @app.get("/api/office/runs/{run_id}")
     def office_run(run_id: str):

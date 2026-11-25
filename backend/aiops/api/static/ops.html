@@ -389,7 +389,7 @@ function renderGate() {
   if (!s || s.status !== 'awaiting_approval') { el.style.display = 'none'; return; }
   el.style.display = '';
   el.innerHTML = `<h3>최종 결정 대기 — 루프 종료: ${REASON[s.stop_reason] || s.stop_reason}</h3>
-    <div class="muted" style="margin-bottom:6px">AI는 확정하지 못합니다. 사람이 승인해야 완료됩니다. (Office 패널은 M1c에서 분리 예정, 지금은 임시로 여기에 있음)</div>
+    <div class="muted" style="margin-bottom:6px">AI는 확정하지 못합니다. 사람이 승인해야 완료됩니다. (Office 화면에서도 같은 결정을 할 수 있음)</div>
     <textarea id="g-comment" placeholder="수정 요청 / 반려 사유 코멘트"></textarea>
     <p style="margin:8px 0 0"><button class="ok" data-d="approve">승인</button>
     <button class="warn" data-d="revise">수정 요청</button>
@@ -517,6 +517,10 @@ function renderCfg() {
     <table style="margin-top:8px"><tr><th>루브릭</th><th>가중치</th></tr>${c.rubric.map(r => `<tr><td title="${esc(r.description)}">${esc(r.name)}</td><td>${r.weight}</td></tr>`).join('')}</table>`;
 }
 
+// when embedded as the Office popup, keyboard focus lives in this frame: forward Esc so the popup can close
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && window.parent !== window && !e.target.closest('textarea,input,select')) parent.postMessage({aiops: 'close'}, location.origin);
+});
 loadRuns();
 setInterval(loadRuns, 4000);
 function fromHash() { if (location.hash.length > 1) select(decodeURIComponent(location.hash.slice(1))); }  // deep link: /ops#<run_id>

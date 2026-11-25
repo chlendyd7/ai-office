@@ -35,6 +35,7 @@ class RunStore:
 
     def append(self, run_id: str, type_: str, /, **data) -> dict:
         with self._lock:
+            self.root.mkdir(parents=True, exist_ok=True)  # survive the runs folder being cleaned while the server runs
             p = self._path(run_id)
             seq = 0
             if p.exists():

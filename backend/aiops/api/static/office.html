@@ -61,6 +61,20 @@ textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:v
 .errtxt{color:var(--err);margin-top:6px}
 .hist{margin:0;padding:0;list-style:none;border-left:2px solid var(--line);font-size:13px;color:var(--dim)}
 .hist li{padding:2px 0 2px 12px}.hist time{font:11px var(--mono);margin-right:8px}.hist b{color:var(--fg)}
+.usage{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0 0 12px;color:var(--dim);font-size:13px}
+.usage b{color:var(--fg);font-variant-numeric:tabular-nums}
+.usage em{color:var(--err);font-style:normal}
+.usage .meter{flex-basis:100%;height:4px;background:var(--panel2);border-radius:2px;overflow:hidden}
+.usage .meter i{display:block;height:100%;background:var(--done)}
+.usage .meter.hot i{background:var(--err)}
+.sp{flex:1}
+.dh .opsb{margin-left:auto;padding:3px 10px;font-size:12px}
+#modal{position:fixed;inset:0;background:rgba(5,4,10,.72);display:flex;align-items:center;justify-content:center;z-index:50}
+#modal[hidden]{display:none}
+.mbox{width:min(1560px,97vw);height:93vh;background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;overflow:hidden}
+.mhead{display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
+.mhead a{color:var(--acc);font-size:13px;text-decoration:none}
+#mframe{flex:1;border:0;background:var(--bg)}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -74,10 +88,12 @@ textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:v
     <div class="stat"><i style="--c:var(--work)"></i><b id="sWork">0</b><span>작업 중</span></div>
     <div class="stat"><i style="--c:var(--acc)"></i><b id="sPend">0</b><span>결정 대기</span></div>
     <div class="stat"><i style="--c:var(--done)"></i><b id="sDone">0</b><span>승인 완료</span></div>
+    <div class="stat" title="전체 run 합계"><i style="--c:#e6bf3f"></i><b id="sTok">0</b><span>토큰</span></div>
+    <div class="stat" title="설정 단가 기준 추정치"><i style="--c:var(--acc)"></i><b id="sCost">$0</b><span>비용 (추정)</span></div>
   </div>
   <div class="ctl">
     <button id="light" title="시간대 변경">시간대 <b id="lightLbl">낮</b><kbd>L</kbd></button>
-    <a id="opslink" href="/ops" target="_blank">Ops 콘솔 ↗</a>
+    <button id="opsbtn" title="프롬프트·응답 전문, 설정, 비교, 새 실행 등 (팝업)">AI Ops</button>
   </div>
 </header>
 <main>
@@ -86,13 +102,19 @@ textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:v
       <canvas id="view" width="960" height="540" aria-label="AI 에이전트 오피스 시각화"></canvas>
       <div class="below">
         <div class="legend" id="legend"></div>
-        <div>에이전트가 일하는 모습만 보여줍니다 · 확정은 사람(결정권자)만 할 수 있습니다</div>
+        <div>에이전트의 작업 모습 · 프롬프트·응답 전문은 상단 <b>AI Ops</b> 팝업에서 · 확정은 사람(결정권자)만 할 수 있습니다</div>
       </div>
     </section>
     <section class="card" id="detail"><div class="empty">오른쪽에서 실행을 선택하세요</div></section>
   </div>
   <aside><div class="card"><h2>결정 대기 / 이력</h2><div id="list"><div class="empty">실행 기록 없음</div></div></div></aside>
 </main>
+<div id="modal" hidden>
+  <div class="mbox" role="dialog" aria-label="AI Ops">
+    <div class="mhead"><b>AI Ops</b><span class="sp"></span><a id="mnew" href="/ops" target="_blank">새 탭으로 ↗</a><button id="mclose">닫기 (Esc)</button></div>
+    <iframe id="mframe" title="AI Ops"></iframe>
+  </div>
+</div>
 <script>
 const W=320,H=180,S=3;
 const FONT="'Malgun Gothic','Apple SD Gothic Neo',system-ui,sans-serif";
@@ -421,13 +443,14 @@ function watch(id){
 }
 function select(id,byUser){
   cur=id;if(byUser)manual=true;lastKey='';
-  $('opslink').href=`/ops#${encodeURIComponent(id)}`;
   watch(id);refresh();
 }
 
 async function loadList(){
   const runs=await api('/api/office/runs');
   const n=s=>runs.filter(r=>r.status===s).length;
+  $('sTok').textContent=runs.reduce((a,r)=>a+r.tokens,0).toLocaleString();
+  $('sCost').textContent='$'+runs.reduce((a,r)=>a+r.cost_usd,0).toFixed(3);
   $('sWork').textContent=n('running');$('sPend').textContent=n('awaiting_approval');$('sDone').textContent=n('approved');
   document.title=(n('awaiting_approval')?`(${n('awaiting_approval')}) `:'')+'AI Office';
   if(!manual){  // follow the newest running run; otherwise the oldest waiting for a decision; otherwise newest
@@ -439,7 +462,7 @@ async function loadList(){
   $('list').innerHTML=runs.length?runs.map(r=>`
     <div class="item${r.run_id===cur?' sel':''}" data-id="${esc(r.run_id)}">
       <span class="chip" style="--c:${SCOL[r.status]}">${STATUS[r.status]||r.status}</span><b>${esc(r.job||r.workflow)}</b>
-      <small>${r.score?r.score.total+'점':'채점 전'} · R${r.rounds}</small></div>`).join(''):'<div class="empty">실행 기록 없음</div>';
+      <small>${r.score?r.score.total+'점':'채점 전'} · R${r.rounds} · ${r.tokens.toLocaleString()} tok · $${r.cost_usd.toFixed(4)}</small></div>`).join(''):'<div class="empty">실행 기록 없음</div>';
 }
 $('list').onclick=e=>{const el=e.target.closest('.item');if(el)select(el.dataset.id,true)};
 
@@ -450,7 +473,12 @@ async function loadDetail(){
   if(key===lastKey)return;  // don't clobber the comment box while typing
   lastKey=key;
   const sc=v.score;
-  let h=`<div class="dh"><b>${esc(v.job||v.workflow)}</b><span class="chip" style="--c:${SCOL[v.status]}">${STATUS[v.status]||v.status}</span><span class="q">${esc(v.question)}</span></div>`;
+  let h=`<div class="dh"><b>${esc(v.job||v.workflow)}</b><span class="chip" style="--c:${SCOL[v.status]}">${STATUS[v.status]||v.status}</span><span class="q">${esc(v.question)}</span><button class="opsb" data-ops="1" title="이 run의 프롬프트·응답 전문, 설정, 비교">AI Ops 상세</button></div>`;
+  const u=v.usage,pct=Math.min(100,u.cost_usd/u.budget_usd*100);
+  h+=`<div class="usage"><span><b>${(u.tokens_in+u.tokens_out).toLocaleString()}</b> 토큰 <small>(입력 ${u.tokens_in.toLocaleString()} / 출력 ${u.tokens_out.toLocaleString()})</small></span>
+    <span><b>$${u.cost_usd.toFixed(4)}</b> / $${u.budget_usd} <small>(추정)</small></span>
+    <span><b>${u.calls}</b> 호출${u.failed_calls?` <em>(실패 ${u.failed_calls})</em>`:''}</span>
+    <div class="meter${pct>=100?' hot':''}"><i style="width:${pct}%"></i></div></div>`;
   if(sc)h+=`<div class="score"><b style="color:${sc.passed?'var(--done)':'var(--acc)'}">${sc.total}</b><span>/ 10 · 기준 ${sc.pass_score} ${sc.passed?'✔ 통과':'✘ 미달'} · ${v.rounds}라운드</span></div>`;
   if(v.result)h+=`<h2>최종 결과물</h2><div class="result">${esc(v.result)}</div>`;
   else h+=`<div class="empty">${v.status==='failed'?'오류로 결과물이 없습니다. Ops 콘솔에서 원인을 확인하세요.':'에이전트가 작업 중입니다…'}</div>`;
@@ -462,7 +490,20 @@ async function loadDetail(){
     `<li><time>${new Date(d.ts).toLocaleString('ko-KR')}</time><b>${DEC[d.decision]}</b> (${esc(d.actor)})${d.comment?' — '+esc(d.comment):''}</li>`).join('')}</ul>`;
   $('detail').innerHTML=h;
 }
+/* AI Ops popup: the full console (timeline with prompts/responses, settings, compare, new run) without leaving Office */
+function openOps(runId){
+  const url='/ops'+(runId?'#'+encodeURIComponent(runId):'');
+  $('mframe').src=url;$('mnew').href=url;$('modal').hidden=false;
+}
+function closeOps(){$('modal').hidden=true;$('mframe').src='about:blank'}
+$('opsbtn').onclick=()=>openOps(cur);
+$('mclose').onclick=closeOps;
+$('modal').onclick=e=>{if(e.target.id==='modal')closeOps()};
+addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('modal').hidden)closeOps()});
+addEventListener('message',e=>{if(e.origin===location.origin&&e.data&&e.data.aiops==='close')closeOps()});  // Esc pressed inside the Ops frame
+
 $('detail').onclick=async e=>{
+  if(e.target.dataset.ops)return openOps(cur);
   const d=e.target.dataset.d;if(!d)return;
   const btns=$('detail').querySelectorAll('button');btns.forEach(b=>b.disabled=true);
   try{await api(`/api/office/runs/${encodeURIComponent(cur)}/decision`,{decision:d,comment:$('comment').value});lastKey='';refresh()}
