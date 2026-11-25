@@ -75,7 +75,17 @@ svg text{fill:var(--muted);font-size:10px}
 <main>
   <section>
     <div class="card">
-      <h3>새 실행 (가짜 LLM)</h3>
+      <h3>새 실행</h3>
+      <label>LLM</label>
+      <select id="f-mode"><option value="fake">가짜 (키 불필요, 무료)</option><option value="hchat">H Chat (실제 호출 · 과금)</option></select>
+      <div id="real-box" style="display:none">
+        <div class="row">
+          <div><label>작성자 모델</label><input id="f-wm" value="claude-sonnet-5"></div>
+          <div><label>리뷰어 모델</label><input id="f-rm" value="claude-haiku-4-5"></div>
+          <div><label>호출당 max tokens</label><input id="f-mt" type="number" min="16" value="1500"></div>
+        </div>
+        <p style="margin:8px 0 0"><button class="ghost" id="b-test" type="button">연결 테스트</button> <span id="llm-status" class="muted"></span></p>
+      </div>
       <label>지원 직무</label><input id="f-job" value="데이터 엔지니어">
       <label>문항</label><input id="f-q" value="지원동기를 작성하세요">
       <label>초안</label><textarea id="f-draft">저는 데이터에 관심이 많아 지원했습니다. 대학 시절 프로젝트에서 데이터를 다뤄 본 경험이 있습니다.</textarea>
@@ -83,9 +93,9 @@ svg text{fill:var(--muted);font-size:10px}
         <div><label>통과 점수</label><input id="f-pass" type="number" step="0.1" value="8"></div>
         <div><label>라운드 상한</label><input id="f-max" type="number" min="1" value="3"></div>
         <div><label>예산 (USD)</label><input id="f-budget" type="number" step="0.001" value="0.5"></div>
-        <div><label>지연 (ms/호출)</label><input id="f-delay" type="number" min="0" value="1500"></div>
+        <div id="w-delay"><label>지연 (ms/호출, 가짜)</label><input id="f-delay" type="number" min="0" value="1500"></div>
       </div>
-      <label>가짜 리뷰어 점수 시나리오 (쉼표)</label><input id="f-scn" value="5,7,9">
+      <div id="w-scn"><label>가짜 리뷰어 점수 시나리오 (쉼표)</label><input id="f-scn" value="5,7,9"></div>
       <p style="margin:10px 0 0"><button id="b-start">실행</button> <span id="start-err" class="err"></span></p>
     </div>
     <div class="card">
@@ -146,16 +156,41 @@ function select(id) {
   loadRuns();
 }
 
+/* ---------- llm mode ---------- */
+function llmCfg(scn) {
+  if ($('#f-mode').value === 'hchat')
+    return {mode: 'hchat', model: $('#f-wm').value.trim(), models: {reviewer: $('#f-rm').value.trim()}, max_tokens: +$('#f-mt').value};
+  return {scenario: scn.length ? scn : [5], delay_ms: +$('#f-delay').value};
+}
+async function refreshLLM() {
+  const real = $('#f-mode').value === 'hchat';
+  $('#real-box').style.display = real ? '' : 'none';
+  $('#w-delay').style.display = $('#w-scn').style.display = real ? 'none' : '';
+  if (!real) return;
+  const s = (await api('/api/llm/status')).hchat;
+  $('#llm-status').innerHTML = s.configured ? '환경변수 OK' : `<span class="err">환경변수 누락: ${esc(s.missing.join(', '))}</span>`;
+}
+$('#f-mode').onchange = () => refreshLLM().catch(() => {});
+$('#b-test').onclick = async () => {
+  $('#llm-status').textContent = '확인 중…';
+  try {
+    const r = await api('/api/llm/test', {model: $('#f-wm').value.trim()});
+    $('#llm-status').innerHTML = r.ok ? `✔ ${esc(r.model)} · in ${r.tokens_in} / out ${r.tokens_out} · ${r.latency_ms}ms`
+                                      : `<span class="err">✘ ${esc(r.error)}</span>`;
+  } catch (e) { $('#llm-status').innerHTML = `<span class="err">✘ ${esc(e.message)}</span>`; }
+};
+
 /* ---------- start ---------- */
 $('#b-start').onclick = async () => {
   $('#start-err').textContent = '';
+  if ($('#f-mode').value === 'hchat' && !confirm('실제 LLM(H Chat)을 호출합니다. 토큰이 사용되고 과금될 수 있습니다. 계속할까요?')) return;
   const scn = $('#f-scn').value.split(',').map(s => parseFloat(s)).filter(x => !isNaN(x));
   try {
     const {run_id} = await api('/api/runs', {
       workflow: 'cover_letter',
       input: {job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value},
       overrides: {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value,
-                  llm: {scenario: scn.length ? scn : [5], delay_ms: +$('#f-delay').value}},
+                  llm: llmCfg(scn)},
     });
     select(run_id);
   } catch (e) { $('#start-err').textContent = e.message; }
@@ -180,7 +215,7 @@ function renderTop() {
       <div class="meter ${pct >= 100 ? 'hot' : ''}"><i style="width:${pct}%"></i></div></div>
     <div class="kpi"><small>라운드 (패스당 상한 ${s.max_rounds})</small><b>${s.rounds}</b></div>
     <div class="kpi"><small>최근 점수 / 통과</small><b>${last ? last.total : '-'} / ${s.pass_score}</b></div>
-    <div class="kpi"><small>LLM 호출</small><b>${t.calls}</b></div>
+    <div class="kpi"><small>LLM 호출</small><b>${t.calls}${s.failed_calls ? ` <span class="err">(실패 ${s.failed_calls})</span>` : ''}</b></div>
     <div class="kpi"><small>종료 사유</small><b>${s.error ? '<span class="err">오류</span>' : (REASON[s.stop_reason] || '-')}</b></div>
     <div class="kpi"><small>run</small><b style="font-size:12px">${esc(s.run_id)}</b></div>`;
 }
@@ -212,11 +247,13 @@ function renderTimeline() {
     switch (e.type) {
       case 'run_started': return head('sys', '실행 시작', `${esc(e.workflow)} · ${time}`) + `<h5>입력</h5><pre>${esc(JSON.stringify(e.input, null, 2))}</pre></details>`;
       case 'llm_call': return head(e.agent, `R${e.round} ${e.agent === 'writer' ? '작성자' : '리뷰어'} <span class="muted">(${e.purpose})</span>`,
-          `in ${fmt(e.tokens_in)} / out ${fmt(e.tokens_out)} · $${e.cost_usd.toFixed(6)} · ${e.latency_ms}ms · ${esc(e.model)}`)
+          `in ${fmt(e.tokens_in)} / out ${fmt(e.tokens_out)} · $${e.cost_usd.toFixed(6)} · ${e.latency_ms}ms${e.attempts > 1 ? ` · <span class="err">재시도 ${e.attempts - 1}회</span>` : ''} · ${esc(e.model)}`)
         + `<h5>프롬프트</h5><pre>${esc(e.prompt)}</pre><h5>응답</h5><pre>${esc(e.response)}</pre></details>`;
       case 'score': return head('score', `R${e.round} 채점 <b>${e.total}</b> / ${e.pass_score} ${e.passed ? '✔ 통과' : ''}`, '항목별')
         + `<table><tr><th>항목</th><th>가중치</th><th>점수</th></tr>${e.criteria.map(c => `<tr><td>${esc(c.name)}</td><td>${c.weight}</td><td>${c.score}</td></tr>`).join('')}</table>`
         + e.criteria.map(c => `<div class="muted" style="font-size:12px">· ${esc(c.feedback)}</div>`).join('') + '</details>';
+      case 'call_failed': return head('err', `R${e.round} ${e.agent === 'writer' ? '작성자' : '리뷰어'} <span class="muted">호출 실패</span>`, `${e.latency_ms}ms`)
+        + `<h5>오류</h5><pre>${esc(e.error)}</pre><h5>프롬프트</h5><pre>${esc(e.prompt)}</pre></details>`;
       case 'call_started': return '';  // transient marker (drives office animation); the llm_call row follows
       case 'artifact': return `<div class="ev sys"><span class="t">결과물 생성</span> <span class="m">R${e.round}</span></div>`;
       case 'loop_stopped': return `<div class="ev sys"><span class="t">루프 종료</span> <span class="m">${REASON[e.reason] || e.reason}</span></div>`;
@@ -301,7 +338,9 @@ function renderCfg() {
     <span>통과 점수</span><span>${c.pass_score}</span><span>라운드 상한(패스당)</span><span>${c.max_rounds}</span>
     <span>예산</span><span>$${c.budget_usd}</span><span>LLM</span><span>${esc(c.llm.mode)} / ${esc(c.llm.model)}</span>
     <span>단가(1k tok)</span><span>in $${c.pricing.in_per_1k} / out $${c.pricing.out_per_1k}</span>
-    <span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span></div>
+    <span>최대 토큰/호출</span><span>${c.llm.max_tokens ?? '-'}</span>
+    ${c.llm.mode === 'fake' ? `<span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span>`
+      : `<span>모델</span><span>${esc(c.llm.model)} (리뷰어: ${esc(c.llm.models.reviewer || c.llm.model)})</span>`}</div>
     <table style="margin-top:8px"><tr><th>루브릭</th><th>가중치</th></tr>${c.rubric.map(r => `<tr><td title="${esc(r.description)}">${esc(r.name)}</td><td>${r.weight}</td></tr>`).join('')}</table>`;
 }
 

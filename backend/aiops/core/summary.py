@@ -32,9 +32,12 @@ def summarize(events: list[dict]) -> dict:
     total, by_agent, by_round = _bucket(), {}, {}
     scores, decisions = [], []
     stop_reason = result = error = None
+    failed_calls = 0
     for e in events:
         t = e["type"]
-        if t == "llm_call":
+        if t == "call_failed":
+            failed_calls += 1
+        elif t == "llm_call":
             _add(total, e)
             _add(by_agent.setdefault(e["agent"], _bucket()), e)
             _add(by_round.setdefault(e["round"], _bucket()), e)
@@ -57,6 +60,7 @@ def summarize(events: list[dict]) -> dict:
         "input": started["input"],
         "result": result,
         "totals": total,
+        "failed_calls": failed_calls,
         "by_agent": by_agent,
         "by_round": by_round,
         "scores": scores,

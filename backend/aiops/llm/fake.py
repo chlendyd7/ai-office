@@ -42,9 +42,3 @@ class FakeLLM:
             for n in meta["rubric"]
         ]
         return json.dumps({"criteria": criteria}, ensure_ascii=False)
-
-
-def make_llm(cfg: LLMConfig):
-    if cfg.mode == "fake":
-        return FakeLLM(cfg)
-    raise NotImplementedError(f"llm.mode={cfg.mode!r} is not implemented yet (real LLM: M2)")

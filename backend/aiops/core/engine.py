@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from ..llm.fake import make_llm
+from ..llm.factory import make_llm
 from ..workflows.base import BUDGET_EXCEEDED, Workflow, PassContext
 from .config import RunConfig, deep_merge
 from .metered import MeteredLLM

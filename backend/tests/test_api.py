@@ -61,3 +61,30 @@ def test_error_codes(client):
     assert client.post("/api/runs", json={"workflow": "zzz", "input": {}}).status_code == 404
     assert client.post("/api/runs", json={"workflow": "cover_letter", "input": {}, "overrides": {"llm": {"mode": "real"}}}).status_code == 400
     assert client.post("/api/runs", json={"workflow": "cover_letter", "input": {}, "overrides": {"max_rounds": 0}}).status_code == 400
+
+
+def test_llm_status_reports_missing_names_never_values(client, monkeypatch):
+    monkeypatch.delenv("H_CHAT_API_KEY", raising=False)
+    monkeypatch.setenv("H_CHAT_BASE_URL", "https://gateway.example/secret-path")
+    s = client.get("/api/llm/status").json()["hchat"]
+    assert s == {"configured": False, "missing": ["H_CHAT_API_KEY"]}
+    monkeypatch.setenv("H_CHAT_API_KEY", "sk-VERY-SECRET")
+    resp = client.get("/api/llm/status")
+    assert resp.json()["hchat"]["configured"] is True
+    assert "sk-VERY-SECRET" not in resp.text and "secret-path" not in resp.text
+
+
+def test_llm_test_reports_a_clear_error_when_not_configured(client, monkeypatch):
+    for n in ("H_CHAT_API_KEY", "H_CHAT_BASE_URL"):
+        monkeypatch.delenv(n, raising=False)
+    r = client.post("/api/llm/test", json={"model": "claude-sonnet-5"}).json()
+    assert r["ok"] is False and "H_CHAT_API_KEY" in r["error"]
+
+
+def test_starting_a_real_run_without_env_is_a_400_with_the_reason(client, monkeypatch):
+    for n in ("H_CHAT_API_KEY", "H_CHAT_BASE_URL"):
+        monkeypatch.delenv(n, raising=False)
+    r = client.post("/api/runs", json={"workflow": "cover_letter", "input": INPUT,
+                                       "overrides": {"llm": {"mode": "hchat", "model": "claude-sonnet-5"}}})
+    assert r.status_code == 400 and "H_CHAT_API_KEY" in r.json()["detail"]
+    assert client.get("/api/runs").json() == []  # nothing recorded

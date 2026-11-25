@@ -41,12 +41,19 @@ def test_stops_at_max_rounds(eng):
     assert s["status"] == "awaiting_approval"
 
 
-def test_budget_guard_stops_before_review(eng):
-    _, ev, s = run(eng, budget_usd=0.00001)
+def test_budget_guard_refuses_a_call_that_could_exceed_the_budget(eng):
+    # budget fits the first (write) call but not the worst case of the next (review) call
+    _, ev, s = run(eng, budget_usd=0.001, llm={"max_tokens": 16})
     assert s["stop_reason"] == "budget_exceeded"
-    assert [c["purpose"] for c in calls(ev)] == ["write"]  # no further spend after the cap is hit
-    assert s["totals"]["cost_usd"] >= 0.00001
+    assert [c["purpose"] for c in calls(ev)] == ["write"]
+    assert s["totals"]["cost_usd"] <= 0.001  # never overshoots
     assert s["status"] == "awaiting_approval"
+
+
+def test_budget_too_small_for_any_call_sends_nothing(eng):
+    _, ev, s = run(eng, budget_usd=0.00001)
+    assert s["stop_reason"] == "budget_exceeded" and calls(ev) == []
+    assert s["totals"]["cost_usd"] == 0 and s["status"] == "awaiting_approval"
 
 
 def test_token_and_cost_totals_equal_sum_of_calls(eng):
@@ -151,14 +158,15 @@ def test_failure_is_recorded_not_swallowed(tmp_path):
 
     eng = Engine(RunStore(tmp_path), REGISTRY, llm_factory=lambda c: Bad(c))
     _, ev, s = run(eng)
-    assert s["status"] == "failed" and "JSONDecodeError" in s["error"]
+    assert s["status"] == "failed" and "no JSON object" in s["error"]
     assert len(calls(ev)) == 2  # tokens spent before the failure are still counted
     assert s["totals"]["calls"] == 2
 
 
-def test_real_mode_not_implemented_yet(eng):
-    with pytest.raises(NotImplementedError):
+def test_unsupported_llm_mode_is_rejected_before_anything_is_recorded(eng):
+    with pytest.raises(ValueError, match="unsupported llm.mode"):
         eng.start("cover_letter", INPUT, {"llm": {"mode": "real"}})
+    assert eng.store.list_runs() == []
 
 
 def test_run_id_is_validated(tmp_path):

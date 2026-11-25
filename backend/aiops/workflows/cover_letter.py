@@ -1,11 +1,12 @@
 """Cover-letter (자기소개서) writer <-> reviewer loop. First workload on the AI Ops core."""
 from __future__ import annotations
 
-import json
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from ..core.jsonx import extract_json
+from ..core.metered import BudgetExceeded
 from .base import BUDGET_EXCEEDED, MAX_ROUNDS, PASSED, PassContext
 
 DEFAULT_RUBRIC = [
@@ -50,10 +51,7 @@ def _reviewer_prompt(inp: dict, draft: str, rubric) -> str:
 
 
 def _parse_review(raw: str, rubric) -> list[dict]:
-    txt = raw.strip()
-    if txt.startswith("```"):
-        txt = txt.strip("`").removeprefix("json").strip()
-    by = {c["name"]: c for c in json.loads(txt)["criteria"]}
+    by = {c["name"]: c for c in extract_json(raw)["criteria"]}
     out = []
     for c in rubric:
         if c.name not in by:
@@ -91,26 +89,32 @@ class CoverLetter:
 
         def write(s: _S) -> dict:
             r = s["round"] + 1
-            text = llm.complete(
-                agent="writer",
-                purpose="write",
-                round=r,
-                prompt=_writer_prompt(inp, s["draft"], s["feedback"]),
-                meta={"original": inp.get("draft", ""), "feedback": s["feedback"], "round": r},
-            )
+            try:
+                text = llm.complete(
+                    agent="writer",
+                    purpose="write",
+                    round=r,
+                    prompt=_writer_prompt(inp, s["draft"], s["feedback"]),
+                    meta={"original": inp.get("draft", ""), "feedback": s["feedback"], "round": r},
+                )
+            except BudgetExceeded:  # refused before sending: nothing was spent
+                return {"stop_reason": BUDGET_EXCEEDED}
             out = {"round": r, "in_pass": s["in_pass"] + 1, "draft": text}
             if llm.over_budget():
                 out["stop_reason"] = BUDGET_EXCEEDED
             return out
 
         def review(s: _S) -> dict:
-            raw = llm.complete(
-                agent="reviewer",
-                purpose="review",
-                round=s["round"],
-                prompt=_reviewer_prompt(inp, s["draft"], cfg.rubric),
-                meta={"rubric": [c.name for c in cfg.rubric], "review_index": s["review_idx"], "round": s["round"]},
-            )
+            try:
+                raw = llm.complete(
+                    agent="reviewer",
+                    purpose="review",
+                    round=s["round"],
+                    prompt=_reviewer_prompt(inp, s["draft"], cfg.rubric),
+                    meta={"rubric": [c.name for c in cfg.rubric], "review_index": s["review_idx"], "round": s["round"]},
+                )
+            except BudgetExceeded:
+                return {"stop_reason": BUDGET_EXCEEDED, "passed": False}
             criteria = _parse_review(raw, cfg.rubric)
             total = round(sum(c["score"] * c["weight"] for c in criteria) / sum(c["weight"] for c in criteria), 3)
             passed = total >= cfg.pass_score
@@ -119,6 +123,8 @@ class CoverLetter:
             return {"feedback": fb, "passed": passed, "review_idx": s["review_idx"] + 1}
 
         def decide(s: _S) -> dict:
+            if s["stop_reason"]:  # review was refused by the budget guard
+                return {}
             if s["passed"]:
                 reason = PASSED
             elif llm.over_budget():

@@ -28,7 +28,7 @@ def activity(ev: dict) -> dict | None:
         return {"k": "begin"}
     if t == "call_started":
         return {"k": "start", "agent": ev["agent"], "purpose": ev["purpose"], "round": ev["round"]}
-    if t == "llm_call":
+    if t in ("llm_call", "call_failed"):
         return {"k": "end", "agent": ev["agent"]}
     if t == "gate_opened":
         return {"k": "gate"}

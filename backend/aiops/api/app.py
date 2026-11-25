@@ -3,16 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from ..core.config import LLMConfig
 from ..core.engine import Engine, GateError
+from ..core.env import load_env_file
 from ..core.store import RunStore
 from ..core.summary import summarize
+from ..llm.hchat import HChatClient
 from ..office.view import activity, office_view
 from ..workflows import REGISTRY
 
@@ -24,6 +29,10 @@ class StartReq(BaseModel):
     workflow: str
     input: dict
     overrides: dict = Field(default_factory=dict)
+
+
+class LLMTestReq(BaseModel):
+    model: str
 
 
 class DecisionReq(BaseModel):
@@ -103,6 +112,24 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
         decide(run_id, DecisionReq(decision=req.decision, comment=req.comment, actor="office"))
         return office_view(summarize(store.read(run_id)))
 
+    # ---- LLM connectivity (values of secrets are never returned) ----
+    @app.get("/api/llm/status")
+    def llm_status():
+        missing = [n for n in ("H_CHAT_API_KEY", "H_CHAT_BASE_URL") if not os.environ.get(n)]
+        return {"hchat": {"configured": not missing, "missing": missing}}
+
+    @app.post("/api/llm/test")
+    def llm_test(req: LLMTestReq):
+        """One tiny real call (~20 tokens) so you can check key/URL/model before a full run. Not recorded in any run."""
+        try:
+            client = HChatClient(LLMConfig(mode="hchat", model=req.model, max_tokens=16, max_retries=0, timeout_s=20))
+            t0 = time.perf_counter()
+            res = client.complete(agent="test", purpose="test", prompt="Reply with the single word OK.", meta={})
+            return {"ok": True, "model": res.model, "tokens_in": res.tokens_in, "tokens_out": res.tokens_out,
+                    "latency_ms": int((time.perf_counter() - t0) * 1000), "reply": res.text[:60]}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     # ---- Ops surface: everything ----
     @app.get("/api/workflows")
     def workflows():
@@ -157,4 +184,5 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
     return app
 
 
+load_env_file(BACKEND / ".env")  # optional local file (git-ignored); real environment variables win
 app = create_app()

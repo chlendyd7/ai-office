@@ -28,12 +28,39 @@ python -m venv .venv
 - Ops: http://127.0.0.1:8765/ops (`/ops#<run_id>` 딥링크)
 - Ops 화면의 "새 실행"에서 실행하면 Office 가 가장 최근 작업 중인 run 을 자동으로 따라감
 
+## 실제 LLM (H Chat) 연결
+
+키와 주소는 **환경변수로만** 받음 (레포·run 기록에 저장되지 않음). `backend/.env`(git 제외)에 적어도 됨 → `backend/.env.example` 참고.
+
+| 변수 | 필수 | 설명 |
+|---|---|---|
+| `H_CHAT_API_KEY` | ✔ | API 키 |
+| `H_CHAT_BASE_URL` | ✔ | 게이트웨이의 Claude messages 엔드포인트 전체 URL |
+| `H_CHAT_PROJECT_ID` | | 있으면 `X-Project-Id` 헤더로 전송 |
+| `H_CHAT_AUTH_PREFIX` | | 기본 `Bearer `. 401 이 나면 빈 값으로 |
+
+Ops 화면 "새 실행"에서 LLM 을 `H Chat` 으로 선택 → **연결 테스트**(약 20 토큰 1회 호출) → 실행.
+작성자/리뷰어 모델을 따로 지정할 수 있음(심사 모델을 다르게 두는 것을 권장). 모델별 단가는 `pricing_models` 로 지정(미지정 시 기본 단가, 모두 추정치).
+
+방어 로직: 호출 전 최악 비용(입력 추정 + `max_tokens`)이 예산을 넘으면 **호출하지 않고** 멈춤 · 429/5xx/네트워크 오류는 재시도(횟수는 `attempts` 로 기록) ·
+실패한 호출도 `call_failed` 로 프롬프트와 함께 기록 · 응답에 usage 가 없으면 조용히 0 으로 처리하지 않고 실패 · 리뷰어 응답에 설명문이 붙어도 JSON 추출.
+
+### 키 없이 실제 호출 경로 시험하기
+
+```bash
+cd backend
+.venv/Scripts/python tools/mock_hchat.py --port 8999 --key local-test-key --chatty       # 가짜 게이트웨이 (--fail-every 3, --latency 1 도 가능)
+# 다른 터미널
+set H_CHAT_API_KEY=local-test-key & set H_CHAT_BASE_URL=http://127.0.0.1:8999/claude/messages    # PowerShell: $env:H_CHAT_API_KEY=...
+.venv/Scripts/python -m uvicorn aiops.api.app:app --host 127.0.0.1 --port 8765
+```
+
 ## 구조
 
 ```
 backend/aiops/
-  core/       store(JSONL 기록), metered(LLM 계측), engine(수명주기+승인 게이트), summary, config
-  llm/        LLMClient 인터페이스, FakeLLM(결정적 점수 시나리오)
+  core/       store(JSONL 기록), metered(LLM 계측·예산 가드), engine(수명주기+승인 게이트), summary, config, jsonx, env
+  llm/        LLMClient 인터페이스, FakeLLM(결정적 점수 시나리오), HChatClient(실제 호출)
   workflows/  cover_letter (LangGraph write → review → decide 루프). 워크플로 추가 = 파일 추가
   office/     Office 전용 뷰(결과/점수/결정, 애니메이션 이벤트)
   api/        FastAPI + SSE, static/{ops,office}.html (빌드 없는 단일 HTML)
@@ -45,9 +72,10 @@ Office 캔버스는 `design/mockup.html`의 코드를 그대로 재사용하고,
 
 ## 상태
 
-- 완료: 코어, 자소서 워크플로(가짜 LLM), Ops 콘솔, Office(캔버스 + 승인), 테스트 25개
-- 예정: 실제 LLM(Claude API, 실제 usage), 루브릭 편집 UI, run 비교, 단계 승인 모드, 두 번째 워크플로
-- `llm.mode=real` 은 아직 미구현(명확한 에러). 가짜 LLM의 토큰은 글자 수 기반 추정이며 비용은 설정 단가 기준 추정치
+- 완료: 코어, 자소서 워크플로, Ops 콘솔, Office(캔버스 + 승인), 가짜 LLM, H Chat 클라이언트, 테스트 49개
+- **H Chat 은 로컬 가짜 게이트웨이로만 검증됨.** 실제 게이트웨이와의 첫 연결은 직접 확인 필요(Authorization 접두어, 응답 형식)
+- 예정: 루브릭 편집 UI, run 비교, 단계 승인 모드, 두 번째 워크플로
+- 가짜 LLM의 토큰은 글자 수 기반 추정이며 비용은 설정 단가 기준 추정치
 
 ## 데이터 주의
 

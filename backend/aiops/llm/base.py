@@ -9,6 +9,8 @@ class LLMResult:
     text: str
     tokens_in: int
     tokens_out: int
+    model: str | None = None  # the model that actually answered (falls back to client.model)
+    attempts: int = 1  # HTTP attempts it took (>1 means retries happened)
 
 
 class LLMClient(Protocol):

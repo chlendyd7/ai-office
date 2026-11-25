@@ -1,4 +1,5 @@
-"""Run configuration. Snapshotted into the `run_started` event so every run is reproducible."""
+"""Run configuration. Snapshotted into the `run_started` event so every run is reproducible.
+Never contains secrets: API keys/endpoints come from environment variables only."""
 from __future__ import annotations
 
 from typing import Any
@@ -13,8 +14,12 @@ class Criterion(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    mode: str = "fake"  # "fake" | "real" (real: M2)
-    model: str = "fake-1"
+    mode: str = "fake"  # "fake" | "hchat"
+    model: str = "fake-1"  # default model; hchat requires an explicit one
+    models: dict[str, str] = Field(default_factory=dict)  # per-agent override, e.g. {"reviewer": "claude-haiku-4-5"}
+    max_tokens: int = Field(default=2000, ge=16)  # per call output cap; also bounds the worst-case cost of a call
+    timeout_s: float = Field(default=60, gt=0)
+    max_retries: int = Field(default=2, ge=0, le=5)  # 429 / 5xx / network errors only
     # fake only: total score returned per review call, in order (last value repeats)
     scenario: list[float] = Field(default_factory=lambda: [5.0, 7.0, 9.0], min_length=1)
     delay_ms: int = Field(default=0, ge=0)  # fake only: simulated latency per call (to watch a run live)
@@ -31,10 +36,19 @@ class RunConfig(BaseModel):
     workflow: str
     llm: LLMConfig = Field(default_factory=LLMConfig)
     pricing: Pricing = Field(default_factory=Pricing)
+    pricing_models: dict[str, Pricing] = Field(default_factory=dict)  # per-model override of `pricing`
     rubric: list[Criterion] = Field(min_length=1)
     pass_score: float = Field(default=8.0, ge=0, le=10)
     max_rounds: int = Field(default=3, ge=1)  # per pass (a human "revise" starts a new pass)
     budget_usd: float = Field(default=0.5, gt=0)
+
+    def price_for(self, model: str) -> Pricing:
+        return self.pricing_models.get(model, self.pricing)
+
+    def worst_prices(self) -> Pricing:
+        """Highest configured prices: used to bound a call's cost before the model is known."""
+        ps = [self.pricing, *self.pricing_models.values()]
+        return Pricing(in_per_1k=max(p.in_per_1k for p in ps), out_per_1k=max(p.out_per_1k for p in ps))
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
