@@ -31,13 +31,14 @@ class Engine:
         self.run_pass(run_id, feedback=None)
         return run_id
 
-    def create(self, workflow: str, input: dict, overrides: dict | None = None) -> str:
+    def create(self, workflow: str, input: dict, overrides: dict | None = None, parent: str | None = None) -> str:
         """Record the run (config snapshot + input) without running it. Lets callers run the first pass in background."""
         wf = self.workflows[workflow]
         cfg = RunConfig.model_validate(deep_merge(wf.default_config(), overrides or {}))
         self.llm_factory(cfg.llm)  # fail fast on a bad llm config, before anything is recorded
         run_id = self.store.new_run_id()
-        self.store.append(run_id, "run_started", run_id=run_id, workflow=workflow, config=cfg.model_dump(), input=input)
+        self.store.append(run_id, "run_started", run_id=run_id, workflow=workflow, config=cfg.model_dump(), input=input,
+                          parent=parent)  # parent: the run this one re-executes (None for a fresh run)
         return run_id
 
     def decide(self, run_id: str, decision: str, comment: str = "", actor: str = "human") -> None:

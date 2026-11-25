@@ -53,6 +53,7 @@ def summarize(events: list[dict]) -> dict:
             error = e["message"]
     return {
         "run_id": started.get("run_id"),
+        "parent": started.get("parent"),
         "workflow": started["workflow"],
         "status": derive_status(events),
         "stop_reason": stop_reason,

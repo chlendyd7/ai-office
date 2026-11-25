@@ -88,3 +88,29 @@ def test_starting_a_real_run_without_env_is_a_400_with_the_reason(client, monkey
                                        "overrides": {"llm": {"mode": "hchat", "model": "claude-sonnet-5"}}})
     assert r.status_code == 400 and "H_CHAT_API_KEY" in r.json()["detail"]
     assert client.get("/api/runs").json() == []  # nothing recorded
+
+
+def test_rerun_copies_input_and_settings_and_links_the_original(client):
+    rid = start(client, pass_score=9.5, max_rounds=2, llm={"scenario": [4, 6]})
+    wait_status(client, rid, "awaiting_approval")
+    new = client.post(f"/api/runs/{rid}/rerun", json={}).json()["run_id"]
+    assert new != rid
+    wait_status(client, new, "awaiting_approval")
+    a, b = (client.get(f"/api/runs/{x}").json() for x in (rid, new))
+    assert b["events"][0]["config"] == a["events"][0]["config"] and b["events"][0]["input"] == a["events"][0]["input"]
+    assert b["summary"]["parent"] == rid and a["summary"]["parent"] is None
+    assert [s["total"] for s in b["summary"]["scores"]] == [s["total"] for s in a["summary"]["scores"]]  # deterministic fake
+
+
+def test_rerun_with_overrides_changes_only_those_settings(client):
+    rid = start(client, max_rounds=1, llm={"scenario": [5, 9]})
+    wait_status(client, rid, "awaiting_approval")
+    new = client.post(f"/api/runs/{rid}/rerun", json={"overrides": {"max_rounds": 3, "llm": {"scenario": [9]}}}).json()["run_id"]
+    s = wait_status(client, new, "awaiting_approval")
+    cfg = client.get(f"/api/runs/{new}").json()["events"][0]["config"]
+    assert cfg["max_rounds"] == 3 and cfg["llm"]["scenario"] == [9] and cfg["pass_score"] == 8.0
+    assert s["stop_reason"] == "passed" and s["rounds"] == 1
+
+
+def test_rerun_unknown_run_is_404(client):
+    assert client.post("/api/runs/nope/rerun", json={}).status_code == 404

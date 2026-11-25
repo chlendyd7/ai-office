@@ -66,6 +66,10 @@ ins{background:var(--ins);text-decoration:none}del{background:var(--del)}
 .gate{border-color:var(--warn)}
 svg text{fill:var(--muted);font-size:10px}
 .empty{color:var(--muted);padding:30px 10px;text-align:center}
+.run{display:flex;gap:8px;align-items:flex-start}
+.run input{width:auto;margin-top:4px}
+.cmpt{margin-bottom:10px}
+.result{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;line-height:1.7;font-size:13px}
 </style>
 </head>
 <body>
@@ -84,6 +88,13 @@ svg text{fill:var(--muted);font-size:10px}
           <div><label>리뷰어 모델</label><input id="f-rm" value="claude-haiku-4-5"></div>
           <div><label>호출당 max tokens</label><input id="f-mt" type="number" min="16" value="1500"></div>
         </div>
+        <label>단가 (USD / 100만 토큰 · 비우면 기본 단가로 추정)</label>
+        <div class="row">
+          <div><label>작성자 입력</label><input id="f-wpi" type="number" step="0.01" min="0"></div>
+          <div><label>작성자 출력</label><input id="f-wpo" type="number" step="0.01" min="0"></div>
+          <div><label>리뷰어 입력</label><input id="f-rpi" type="number" step="0.01" min="0"></div>
+          <div><label>리뷰어 출력</label><input id="f-rpo" type="number" step="0.01" min="0"></div>
+        </div>
         <p style="margin:8px 0 0"><button class="ghost" id="b-test" type="button">연결 테스트</button> <span id="llm-status" class="muted"></span></p>
       </div>
       <label>지원 직무</label><input id="f-job" value="데이터 엔지니어">
@@ -99,13 +110,14 @@ svg text{fill:var(--muted);font-size:10px}
       <p style="margin:10px 0 0"><button id="b-start">실행</button> <span id="start-err" class="err"></span></p>
     </div>
     <div class="card">
-      <h3>실행 이력</h3>
+      <h3>실행 이력 <button class="ghost" id="b-compare" disabled style="float:right;padding:2px 10px;font-size:12px">비교 (0/2)</button></h3>
       <div class="runs" id="runs"></div>
     </div>
     <div class="card" id="cfg"></div>
   </section>
 
   <section>
+    <div class="card" id="cmp" style="display:none"></div>
     <div class="card gate" id="gate" style="display:none"></div>
     <div class="card"><h3>타임라인 (프롬프트·응답 전문)</h3><div class="tl" id="tl"><div class="empty">왼쪽에서 실행하거나 이력을 선택하세요</div></div></div>
   </section>
@@ -141,11 +153,79 @@ async function loadRuns() {
   const runs = await api('/api/runs');
   $('#runs').innerHTML = runs.length ? runs.map(r => `
     <div class="run ${r.run_id === cur ? 'sel' : ''}" data-id="${esc(r.run_id)}">
-      <span class="badge s-${r.status}">${STATUS[r.status] || r.status}</span> ${esc(r.workflow)}
-      <small>${esc(r.run_id)} · R${r.rounds} · ${r.last_score ?? '-'}점 · ${fmt(r.tokens)} tok · $${r.cost_usd.toFixed(4)}</small>
+      <input type="checkbox" class="cmpbox" data-id="${esc(r.run_id)}" title="비교할 run 선택 (최대 2개)" ${cmpSel.includes(r.run_id) ? 'checked' : ''}>
+      <div><span class="badge s-${r.status}">${STATUS[r.status] || r.status}</span> ${esc(r.workflow)}
+      <small>${esc(r.run_id)} · R${r.rounds} · ${r.last_score ?? '-'}점 · ${fmt(r.tokens)} tok · $${r.cost_usd.toFixed(4)}</small></div>
     </div>`).join('') : '<div class="muted">실행 기록 없음</div>';
 }
-$('#runs').onclick = e => { const el = e.target.closest('.run'); if (el) select(el.dataset.id); };
+let cmpSel = [];
+function updCmpBtn() { const b = $('#b-compare'); b.textContent = `비교 (${cmpSel.length}/2)`; b.disabled = cmpSel.length !== 2; }
+$('#runs').onclick = e => {
+  const box = e.target.closest('.cmpbox');
+  if (box) {
+    cmpSel = box.checked ? [...cmpSel, box.dataset.id].slice(-2) : cmpSel.filter(x => x !== box.dataset.id);
+    updCmpBtn(); loadRuns(); return;
+  }
+  const el = e.target.closest('.run'); if (el) select(el.dataset.id);
+};
+$('#b-compare').onclick = () => openCompare(cmpSel[0], cmpSel[1]).catch(err => alert(err.message));
+
+/* ---------- compare two runs ---------- */
+const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) =>
+  v && typeof v === 'object' && !Array.isArray(v) ? flat(v, p + k + '.') : [[p + k, JSON.stringify(v)]]);
+function metrics(R) {
+  const s = R.summary, calls = R.events.filter(e => e.type === 'llm_call');
+  return {
+    '상태': STATUS[s.status] || s.status, '종료 사유': s.error ? '오류' : (REASON[s.stop_reason] || '-'),
+    '라운드': s.rounds, '최종 점수': s.scores.at(-1)?.total ?? null,
+    '입력 토큰': s.totals.tokens_in, '출력 토큰': s.totals.tokens_out, '비용 (추정 $)': s.totals.cost_usd,
+    'LLM 호출': s.totals.calls, '호출 지연 합 (ms)': calls.reduce((a, e) => a + e.latency_ms, 0),
+    '재시도': calls.reduce((a, e) => a + ((e.attempts || 1) - 1), 0), '실패한 호출': s.failed_calls,
+  };
+}
+function cmpChart(A, B) {
+  const W = 640, H = 150, pad = 28, n = Math.max(A.length, B.length, 2);
+  const x = i => pad + i * (W - 2 * pad) / (n - 1), y = v => H - pad - v / 10 * (H - 2 * pad);
+  const line = (pts, col) => pts.length ? `<polyline fill="none" stroke="${col}" stroke-width="2" points="${pts.map((p, i) => `${x(i)},${y(p.total)}`).join(' ')}"/>`
+    + pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.total)}" r="3" fill="${col}"/><text x="${x(i) - 6}" y="${y(p.total) - 6}" style="fill:${col}">${p.total}</text>`).join('') : '';
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${[0, 5, 10].map(v => `<line x1="${pad}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="2" y="${y(v) + 3}">${v}</text>`).join('')}
+    ${line(A, 'var(--accent)')}${line(B, 'var(--warn)')}</svg>`;
+}
+async function openCompare(a, b) {
+  const [A, B] = await Promise.all([api('/api/runs/' + a), api('/api/runs/' + b)]);
+  const ma = metrics(A), mb = metrics(B);
+  const rows = Object.keys(ma).map(k => {
+    const x = ma[k], y = mb[k], num = typeof x === 'number' && typeof y === 'number' && x !== y;
+    return `<tr><td>${k}</td><td>${x ?? '-'}</td><td>${y ?? '-'}</td><td>${num ? (y - x > 0 ? '+' : '') + +(y - x).toFixed(6) : ''}</td></tr>`;
+  }).join('');
+  const ca = Object.fromEntries(flat(A.events[0].config)), cb = Object.fromEntries(flat(B.events[0].config));
+  const diffKeys = [...new Set([...Object.keys(ca), ...Object.keys(cb)])].filter(k => ca[k] !== cb[k]);
+  const sameInput = JSON.stringify(A.events[0].input) === JSON.stringify(B.events[0].input);
+  const ra = A.summary.result?.content, rb = B.summary.result?.content;
+  const rel = B.summary.parent === a ? ' (B는 A의 재실행)' : A.summary.parent === b ? ' (A는 B의 재실행)' : '';
+  $('#cmp').style.display = '';
+  $('#cmp').innerHTML = `<h3>run 비교${rel} <button class="ghost" id="b-cmp-close" style="float:right;padding:2px 10px;font-size:12px">닫기</button></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px"><b style="color:var(--accent)">A</b> ${esc(a)} · <b style="color:var(--warn)">B</b> ${esc(b)}
+      · 입력 ${sameInput ? '동일' : '<span class="err">다름 (결과 비교 시 주의)</span>'}</div>
+    <table class="cmpt"><tr><th></th><th>A</th><th>B</th><th>B − A</th></tr>${rows}</table>
+    <h3>설정 차이</h3>${diffKeys.length ? `<table class="cmpt"><tr><th>항목</th><th>A</th><th>B</th></tr>${diffKeys.map(k =>
+      `<tr><td>${esc(k)}</td><td>${esc(ca[k] ?? '—')}</td><td>${esc(cb[k] ?? '—')}</td></tr>`).join('')}</table>` : '<div class="muted">설정 동일</div>'}
+    <h3 style="margin-top:12px">점수 추이 (A 파랑 · B 주황)</h3>${cmpChart(A.summary.scores, B.summary.scores)}
+    <h3 style="margin-top:12px">결과물 diff (A → B)</h3><div class="result">${ra == null || rb == null ? '<span class="muted">결과 없음</span>' : diff(ra, rb)}</div>`;
+  scrollTo(0, 0);
+}
+$('#cmp').onclick = e => { if (e.target.id === 'b-cmp-close') $('#cmp').style.display = 'none'; };
+
+/* ---------- rerun ---------- */
+$('#cfg').onclick = async e => {
+  if (e.target.id !== 'b-rerun') return;
+  const c = events[0]?.config; if (!c) return;
+  if (c.llm.mode !== 'fake' && !confirm('실제 LLM을 다시 호출합니다. 토큰이 사용되고 과금될 수 있습니다. 계속할까요?')) return;
+  try {
+    const old = cur, {run_id} = await api(`/api/runs/${old}/rerun`, {overrides: {}});
+    cmpSel = [old, run_id]; updCmpBtn(); select(run_id);
+  } catch (err) { alert(err.message); }
+};
 
 function select(id) {
   if (es) es.close();
@@ -161,6 +241,19 @@ function llmCfg(scn) {
   if ($('#f-mode').value === 'hchat')
     return {mode: 'hchat', model: $('#f-wm').value.trim(), models: {reviewer: $('#f-rm').value.trim()}, max_tokens: +$('#f-mt').value};
   return {scenario: scn.length ? scn : [5], delay_ms: +$('#f-delay').value};
+}
+function buildOverrides(scn) {
+  const ov = {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value, llm: llmCfg(scn)};
+  if ($('#f-mode').value === 'hchat') {
+    const per1k = id => { const v = $(id).value; return v === '' ? null : +v / 1000; };  // USD per 1M tokens -> per 1k
+    const pm = {};
+    [['#f-wm', '#f-wpi', '#f-wpo'], ['#f-rm', '#f-rpi', '#f-rpo']].forEach(([m, i, o]) => {
+      const pi = per1k(i), po = per1k(o), name = $(m).value.trim();
+      if (name && pi !== null && po !== null) pm[name] = {in_per_1k: pi, out_per_1k: po};
+    });
+    if (Object.keys(pm).length) ov.pricing_models = pm;
+  }
+  return ov;
 }
 async function refreshLLM() {
   const real = $('#f-mode').value === 'hchat';
@@ -189,8 +282,7 @@ $('#b-start').onclick = async () => {
     const {run_id} = await api('/api/runs', {
       workflow: 'cover_letter',
       input: {job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value},
-      overrides: {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value,
-                  llm: llmCfg(scn)},
+      overrides: buildOverrides(scn),
     });
     select(run_id);
   } catch (e) { $('#start-err').textContent = e.message; }
@@ -340,7 +432,11 @@ function renderCfg() {
     <span>단가(1k tok)</span><span>in $${c.pricing.in_per_1k} / out $${c.pricing.out_per_1k}</span>
     <span>최대 토큰/호출</span><span>${c.llm.max_tokens ?? '-'}</span>
     ${c.llm.mode === 'fake' ? `<span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span>`
-      : `<span>모델</span><span>${esc(c.llm.model)} (리뷰어: ${esc(c.llm.models.reviewer || c.llm.model)})</span>`}</div>
+      : `<span>모델</span><span>${esc(c.llm.model)} (리뷰어: ${esc(c.llm.models.reviewer || c.llm.model)})</span>
+         <span>모델별 단가(1k)</span><span>${Object.keys(c.pricing_models || {}).length ? esc(JSON.stringify(c.pricing_models))
+           : '<span class="err">미지정 → 기본 단가로 추정 (실제와 다를 수 있음)</span>'}</span>`}
+    ${summary?.parent ? `<span>재실행 원본</span><span><a href="#${esc(summary.parent)}" style="color:var(--accent)">${esc(summary.parent)}</a></span>` : ''}</div>
+    <p style="margin:10px 0 0"><button class="ghost" id="b-rerun">같은 설정으로 다시 실행</button></p>
     <table style="margin-top:8px"><tr><th>루브릭</th><th>가중치</th></tr>${c.rubric.map(r => `<tr><td title="${esc(r.description)}">${esc(r.name)}</td><td>${r.weight}</td></tr>`).join('')}</table>`;
 }
 

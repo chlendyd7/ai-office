@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from ..core.config import LLMConfig
+from ..core.config import LLMConfig, deep_merge
 from ..core.engine import Engine, GateError
 from ..core.env import load_env_file
 from ..core.store import RunStore
@@ -28,6 +28,10 @@ STATIC = Path(__file__).parent / "static"
 class StartReq(BaseModel):
     workflow: str
     input: dict
+    overrides: dict = Field(default_factory=dict)
+
+
+class RerunReq(BaseModel):
     overrides: dict = Field(default_factory=dict)
 
 
@@ -157,6 +161,17 @@ def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = 
             raise HTTPException(400, str(e))
         threading.Thread(target=eng.run_pass, args=(run_id,), daemon=True).start()
         return {"run_id": run_id}
+
+    @app.post("/api/runs/{run_id}/rerun")
+    def rerun(run_id: str, req: RerunReq):
+        """Same input and settings snapshot (optionally with overrides) as a new run, to compare against the original."""
+        started = events_or_404(run_id)[0]
+        try:
+            new_id = eng.create(started["workflow"], started["input"], deep_merge(started["config"], req.overrides), parent=run_id)
+        except (ValidationError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        threading.Thread(target=eng.run_pass, args=(new_id,), daemon=True).start()
+        return {"run_id": new_id}
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str):
