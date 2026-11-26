@@ -150,3 +150,11 @@ def test_the_evidence_actually_sent_is_in_the_run_record(tmp_path):
     ev = eng.store.read(rid)
     assert ev[0]["input"]["evidence"][0]["name"] == "경력" and "8시간" in ev[0]["input"]["evidence"][0]["text"]  # traceable: what the writer was given
     assert "[자료: 경력 #1]" in next(e for e in ev if e["type"] == "llm_call")["prompt"]
+
+
+def test_a_computed_figure_does_not_block_the_pass_but_is_recorded_for_the_reader(tmp_path):
+    client = Script(["처리 시간을 8시간에서 2시간으로 줄여 75% 단축했습니다. Python과 SQL을 썼습니다."], [review_json(10)])
+    eng, rid = run(tmp_path, client)
+    s = scores(eng, rid)[0]
+    assert s["passed"] is True and s["blocked_by"] == [] and s["checks"]["facts"]["derived"] == ["75"]
+    assert summarize(eng.store.read(rid))["stop_reason"] == "passed"

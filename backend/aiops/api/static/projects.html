@@ -47,6 +47,7 @@ button.sm{padding:2px 9px;font-size:12px}
 .pend{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:12px;background:var(--panel2)}
 .pend button{margin:4px 6px 0 0}
 .empty{color:var(--muted);padding:40px 10px;text-align:center}
+.final{border:1px solid var(--ok);border-radius:8px;padding:8px 10px;margin-top:8px}.ftext{white-space:pre-wrap;margin-top:4px}
 .unv{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;background:var(--panel2)}
 </style>
 </head>
@@ -74,18 +75,24 @@ async function call(method, path, body) {
   if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || r.status));
   return j;
 }
-let offices = {}, officeKey = '', list = [], view = null, libRes = [], ownRes = [], pending = [], reviewing = null;
+let offices = {}, officeKey = '', list = [], view = null, libRes = [], ownRes = [], libPrompts = [], pending = [], reviewing = null;
 const office = () => offices[view ? view.project.office : officeKey];
 
 /* ---------- forms generated from the office's declaration ---------- */
 function fieldHtml(f, v, pre) {
   const id = `${pre}-${f.name}`, lab = `<label for="${id}">${esc(f.label)}${f.required ? ' *' : ''}</label>`;
   v = v ?? f.default ?? '';
+  if (f.type === 'bool') return `<label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="${id}" data-f="${esc(f.name)}" data-bool style="width:auto" ${v ? 'checked' : ''}> ${esc(f.label)}</label>`;
+  if (f.name.startsWith('prompt_')) {  // a library prompt for this agent: the latest version, or one pinned
+    const role = f.name.slice(7), mine = libPrompts.filter(p => p.role === role);
+    return lab + `<select id="${id}" data-f="${esc(f.name)}"><option value="">내장 기본</option>${mine.map(p => `<option value="${esc(p.name)}" ${v === p.name ? 'selected' : ''}>${esc(p.name)} (최신)</option>`
+      + [...p.versions].reverse().map(x => `<option value="${esc(p.name)}@${x.version}" ${v === p.name + '@' + x.version ? 'selected' : ''}>${esc(p.name)}@${x.version}</option>`).join('')).join('')}</select>`;
+  }
   if (f.type === 'textarea') return lab + `<textarea id="${id}" data-f="${esc(f.name)}">${esc(v)}</textarea>`;
   if (f.type === 'select') return lab + `<select id="${id}" data-f="${esc(f.name)}">${f.options.map(o => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(f.option_labels?.[o] ?? o)}</option>`).join('')}</select>`;
-  return lab + `<input id="${id}" data-f="${esc(f.name)}" type="${f.type === 'number' ? 'number' : 'text'}" ${f.type === 'number' ? 'min="1"' : ''} value="${esc(v)}">`;
+  return lab + `<input id="${id}" data-f="${esc(f.name)}" type="${f.type === 'number' || f.type === 'decimal' ? 'number' : 'text'}" ${f.type === 'number' ? 'min="' + (f.min ?? 1) + '"' : f.type === 'decimal' ? 'step="any"' : ''} value="${esc(v)}">`;
 }
-const readFields = el => Object.fromEntries([...el.querySelectorAll('[data-f]')].map(e => [e.dataset.f, e.value]));
+const readFields = el => Object.fromEntries([...el.querySelectorAll('[data-f]')].map(e => [e.dataset.f, e.dataset.bool !== undefined ? e.checked : e.value]));
 const say = (t, bad) => { $('#hdr-msg').innerHTML = t ? `<span class="${bad ? 'err' : ''}">${esc(t)}</span>` : ''; };
 
 /* ---------- project list and creation ---------- */
@@ -111,6 +118,7 @@ $('#n-create').onclick = async () => {
 /* ---------- one project ---------- */
 async function refreshAux() {
   libRes = await call('GET', '/api/library/resources');
+  libPrompts = await call('GET', '/api/library/prompts');
   ownRes = await call('GET', '/api/library/resources?owner_project_id=' + view.project.id);
 }
 async function openProject(id) {
@@ -138,6 +146,12 @@ function render() {
     <div class="card" id="brief"><h3>기본 정보</h3>${o.brief_fields.map(f => fieldHtml(f, p.brief[f.name], 'b')).join('')}
       <label>메모</label><textarea data-notes>${esc(p.notes)}</textarea>
       <p style="margin:8px 0 0"><button data-act="save-brief">저장</button></p></div>
+
+    <div class="card" id="settings"><h3>에이전트 · 실행 설정</h3>
+      <div class="muted" style="font-size:12px">일하는 에이전트: ${o.agents.map(a => esc(a.label)).join(', ')}. 문항 하나를 쓸 때마다 적용됩니다. <b>기본은 무료 가짜 LLM</b>이고, 실제 게이트웨이는 아래에서 직접 고릅니다.</div>
+      <div class="row">${o.run_settings_fields.filter(f => f.type !== 'bool').map(f => `<div>${fieldHtml(f, view.settings[f.name], 's')}</div>`).join('')}</div>
+      ${o.run_settings_fields.filter(f => f.type === 'bool').map(f => fieldHtml(f, view.settings[f.name], 's')).join('')}
+      <p style="margin:8px 0 0"><button data-act="save-settings">설정 저장</button></p></div>
 
     <div class="card"><h3>자료 — 이 프로젝트가 쓰는 것</h3>
       ${view.resources.length ? view.resources.map(r => `<div class="res"><span class="nm"><b>${esc(r.name)}</b> <span class="tag">${esc(labels[r.role] ?? r.role)}</span>
@@ -176,8 +190,25 @@ function renderDeliverable(d, i, o) {
     <label>원문</label><textarea data-f="title">${esc(d.title)}</textarea>
     <div class="row">${(kind ? kind.spec_fields : []).filter(f => f.type !== 'textarea').map(f => `<div>${fieldHtml(f, d.spec[f.name], 'd' + d.id)}</div>`).join('')}</div>
     ${(kind ? kind.spec_fields : []).filter(f => f.type === 'textarea').map(f => fieldHtml(f, d.spec[f.name], 'd' + d.id)).join('')}
-    <p style="margin:8px 0 0"><button class="sm" data-act="d-save">저장</button></p></div>`;
+    <p style="margin:8px 0 0"><button class="sm" data-act="d-save">저장</button> <button class="sm ok" data-act="d-draft">초안 작성 시작</button></p>
+    <div class="runs" data-did="${esc(d.id)}">${runsHtml(d)}</div></div>`;
 }
+const RUN_STATUS = {running: '작성 중', awaiting_approval: '승인 대기', approved: '승인됨', rejected: '반려됨', failed: '실패'};
+const STOP = {passed: '기준 통과', max_rounds: '라운드 상한', budget_exceeded: '예산 도달', step: '라운드 완료'};
+const BLOCK = {facts: '근거에 없는 수치·용어', length: '글자 수 초과'};
+function runsHtml(d) {  // the approved final, then the runs (newest first): what happened and why a high score did not pass
+  const rs = (view.runs && view.runs[d.id]) || [], m = d.final_meta || {};
+  const fin = d.final_content ? `<div class="final"><b>승인된 최종본</b> <span class="tag ok">${m.chars ?? '?'}자${m.max_chars ? ' / 제한 ' + m.max_chars + '자' : ''}${m.count_mode === 'without_spaces' ? ' · 공백 제외' : ''}${m.within_limit === false ? ' · ⚠ 제한 초과' : ''}</span><div class="ftext">${esc(d.final_content)}</div></div>` : '';
+  const rows = rs.map(r => `<div class="res"><span class="nm">${RUN_STATUS[r.status] || r.status}${r.stop_reason ? ' · ' + (STOP[r.stop_reason] || r.stop_reason) : ''}${r.score != null ? ` · ${r.score}점` : ''}${r.blocked_by.length ? ' · ⚠ ' + r.blocked_by.map(b => BLOCK[b] || b).join(', ') : ''}${r.error ? ' · ' + esc(r.error) : ''}</span>
+    <span class="muted">${r.rounds}라운드 · $${r.cost_usd.toFixed(4)}</span><a href="/ops#${esc(r.run_id)}" target="_blank" style="color:var(--accent)">Ops</a></div>`).join('');
+  const wait = rs.some(r => r.status === 'awaiting_approval') ? '<div class="muted" style="font-size:12px">승인·수정 요청·반려는 <a href="/office" target="_blank" style="color:var(--accent)">Office</a>나 Ops에서 합니다. 승인하면 위의 최종본이 됩니다.</div>' : '';
+  return fin + rows + wait;
+}
+function refreshRuns() { document.querySelectorAll('.runs[data-did]').forEach(el => { const d = view.deliverables.find(x => x.id === el.dataset.did); if (d) el.innerHTML = runsHtml(d); }); }
+setInterval(async () => {  // while something is being written or waits for a decision, keep the status current (without redrawing the forms)
+  if (!view || !Object.values(view.runs || {}).flat().some(r => r.status === 'running' || r.status === 'awaiting_approval')) return;
+  try { view = await call('GET', '/api/projects/' + view.project.id); refreshRuns(); } catch (e) { /* the next tick tries again */ }
+}, 2500);
 function renderOwn(labels) {  // what belongs to this project alone: including text that still waits for a human check
   const mine = ownRes;
   if (!mine.length) return '';
@@ -228,6 +259,14 @@ $('#detail').addEventListener('click', async e => {
       if (!confirm(`"${view.project.title}" 프로젝트를 삭제할까요?\n문항, 자료 연결, 이 프로젝트 전용 자료가 함께 지워집니다. (내 라이브러리 자료와 실행 기록은 그대로)`)) return;
       await call('DELETE', '/api/projects/' + pid); view = null; await loadList(); return render();
     }
+    if (act === 'save-settings') return apply(call('PUT', '/api/projects/' + pid, {settings: readFields($('#settings'))}));
+    if (act === 'd-draft') {
+      const st = view.settings;
+      if (st.mode === 'hchat' && !confirm('실제 게이트웨이로 호출합니다 (과금). 문항 하나 예산 최대 $' + st.budget_usd + ' · 모델: 작성 ' + st.model_writer + ' / 심사 ' + st.model_reviewer + ' . 시작할까요?')) return;
+      const r = await call('POST', `/api/projects/${pid}/deliverables/${card.dataset.id}/draft`, {confirm_real: st.mode === 'hchat'});
+      say(`작성을 시작했습니다 (${r.mode === 'hchat' ? '실제' : '가짜'} LLM, 예산 $${r.budget_usd})`);
+      view = await call('GET', '/api/projects/' + pid); return refreshRuns();
+    }
     if (act === 'detach') return apply(call('DELETE', `/api/projects/${pid}/resources/${id}`));
     if (act === 'paste') return apply(call('POST', `/api/projects/${pid}/resources/paste`, {name: $('#own-name').value, text: $('#own-text').value, role: $('#own-role').value}));
     if (act === 'd-add') return apply(call('POST', `/api/projects/${pid}/deliverables`, {kind: $('#d-kind') ? $('#d-kind').value : Object.keys(office().deliverable_kinds)[0], title: $('#d-new').value}));
@@ -275,6 +314,7 @@ $('#detail').addEventListener('drop', e => { if (e.target.closest('#drop')) uplo
   renderNew(); await loadList();
   if (location.hash.length > 1) openProject(decodeURIComponent(location.hash.slice(1))).catch(() => {});
 })().catch(e => say(e.message, true));
+addEventListener('hashchange', () => { if (location.hash.length > 1) openProject(decodeURIComponent(location.hash.slice(1))).catch(e => say(e.message, true)); });  // a link to #<project> works on an open page too
 </script>
 </body>
 </html>

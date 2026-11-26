@@ -72,3 +72,20 @@ def test_a_query_with_no_overlap_still_returns_something_within_the_limit():
 def test_the_block_says_where_each_passage_came_from():
     block = format_evidence([{"name": "경력", "index": 0, "text": "A"}, {"name": "활동", "index": 2, "text": "B"}])
     assert block == "[자료: 경력 #1]\nA\n\n[자료: 활동 #3]\nB"
+
+
+# ---- figures computed from the material are not invented figures ----
+def test_a_percentage_or_multiple_that_follows_from_one_sentence_is_allowed_and_recorded():
+    ev = ["배치 처리 시간을 8시간에서 2시간으로 단축했다."]
+    f = find_unsupported("처리 시간을 8시간에서 2시간으로 줄여 75% 단축했고, 속도는 4배, 300% 빨라졌습니다.", ev)
+    assert f["numbers"] == [] and f["terms"] == [] and f["derived"] == ["75", "4", "300"]  # allowed, but visible to whoever reads the run
+    assert describe(f) == ""  # and nothing is asked of the writer
+
+
+def test_a_wrong_calculation_or_numbers_from_different_sentences_are_still_invented():
+    ev = ["배치 처리 시간을 8시간에서 2시간으로 단축했다."]
+    assert find_unsupported("80% 단축했습니다.", ev)["numbers"] == ["80"]  # the arithmetic has to be right
+    assert find_unsupported("약 74.9% 단축했습니다.", ev)["numbers"] == ["74.9"]  # a decimal must match to one place: 75, not 74.9
+    apart = ["처리 시간이 8시간이었다. 개선 후에는 2시간이 되었다."]
+    assert find_unsupported("75% 단축했습니다.", apart)["numbers"] == ["75"]  # two places of the material do not combine: too many lucky matches
+    assert "derived" not in find_unsupported("처리 시간을 8시간에서 2시간으로 줄였습니다.", ev)  # nothing computed, nothing recorded

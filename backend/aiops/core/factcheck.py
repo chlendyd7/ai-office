@@ -27,23 +27,53 @@ def _norm(number: str) -> str:
     return number.replace(",", "").rstrip(".")
 
 
+_SENTENCE = re.compile(r"[.!?。\n]+")
+
+
+def _derivable(texts: list[str]) -> list[float]:
+    """Percentages and multiples that follow from two numbers of the SAME sentence of the material ("8시간에서 2시간으로" -> 75%, 300%, 4배).
+    A computed figure is not an invented one. Only a single sentence counts: numbers from different places combine into too many
+    coincidences, and an invented figure could pass by luck."""
+    values: list[float] = []
+    for text in texts:
+        for sentence in _SENTENCE.split(_clean(text)):
+            nums = sorted({float(_norm(m)) for m in _NUMBER.findall(sentence)})
+            for i, small in enumerate(nums):
+                for big in nums[i + 1:]:
+                    if small > 0:
+                        values += [(big - small) / big * 100, (big - small) / small * 100, big / small]
+    return values
+
+
+def _near(n: str, values: list[float]) -> bool:
+    """`n` equals one of the values as written: an integer within rounding, a decimal to one place."""
+    x, tol = float(n), (0.05 if "." in n else 0.5)
+    return any(abs(x - v) <= tol for v in values)
+
+
 def find_unsupported(draft: str, allowed: list[str]) -> dict:
-    """-> {"numbers": [...], "terms": [...]}: what the draft says that no allowed text says, in order of first appearance."""
+    """-> {"numbers": [...], "terms": [...]} (+ "derived": [...] when figures were allowed because they follow from the material):
+    what the draft says that no allowed text says, in order of first appearance."""
     pool = _clean("\n".join(allowed))
     have_n = {_norm(m) for m in _NUMBER.findall(pool)}
     have_t = {t.lower() for t in _TERM.findall(pool)}
     out: dict[str, list[str]] = {"numbers": [], "terms": []}
     body = _clean(draft)
+    derivable = _derivable(allowed)
+    derived: list[str] = []
     for m in _NUMBER.findall(body):
         n = _norm(m)
-        if n not in have_n and n not in out["numbers"]:
-            out["numbers"].append(n)
+        if n in have_n or n in out["numbers"] or n in derived:
+            continue
+        (derived if _near(n, derivable) else out["numbers"]).append(n)
     seen: set[str] = set()
     for t in _TERM.findall(body):
         low = t.lower()
         if low not in COMMON_WORDS and low not in have_t and low not in seen:
             seen.add(low)
             out["terms"].append(t)
+    if derived:
+        out["derived"] = derived  # allowed, but recorded: a human reading the run can see which figures were computed, not quoted
     return out
 
 
