@@ -49,10 +49,16 @@ button.sm{padding:2px 9px;font-size:12px}
 .empty{color:var(--muted);padding:40px 10px;text-align:center}
 .final{border:1px solid var(--ok);border-radius:8px;padding:8px 10px;margin-top:8px}.ftext{white-space:pre-wrap;margin-top:4px}
 .unv{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;background:var(--panel2)}
+.modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding:3vh 12px}
+.modal[hidden]{display:none}
+.mbox{background:var(--bg);border:1px solid var(--line);border-radius:12px;width:min(1080px,100%);height:94vh;display:flex;flex-direction:column;overflow:hidden}
+.mhead{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.mhead .sp{flex:1}.mbox iframe{flex:1;border:0;width:100%;background:var(--bg)}
 </style>
 </head>
 <body>
-<header><b>프로젝트</b><a href="/office">Office</a><a href="/ops">AI Ops</a><span id="hdr-msg" class="muted"></span></header>
+<header><b>프로젝트</b><a href="/office">Office</a><a href="/ops">AI Ops</a><button class="ghost sm" id="open-lib" type="button">📁 자료실</button><span id="hdr-msg" class="muted"></span></header>
+<div id="rs-modal" class="modal" hidden><div class="mbox" role="dialog" aria-label="자료실"><div class="mhead"><b>자료실 — 내 리소스</b><span class="sp"></span><span class="muted" style="font-size:12px">올리기 · 붙여넣기 · 글자 확인과 검수 · 삭제</span><button class="ghost sm" id="rs-close" type="button">닫기 (Esc)</button></div><iframe id="rs-frame" title="자료실" src="about:blank"></iframe></div></div>
 <main>
   <section>
     <div class="card"><h3>새 프로젝트</h3>
@@ -158,11 +164,7 @@ function render() {
         ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전</span>' : ''}${r.owner_project_id ? '<span class="tag">이 프로젝트 전용</span>' : ''}</span>
         <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자</span><button class="ghost sm" data-act="detach" data-id="${esc(r.id)}">빼기</button></div>`).join('') : '<div class="muted">아직 없습니다</div>'}
 
-      <h3 style="margin-top:14px">내 라이브러리에서 고르기 <span class="muted" style="text-transform:none">(검수 완료된 자료만)</span></h3>
-      <div class="row"><div><label>붙일 때의 역할</label><select id="lib-role">${o.resource_roles.map(r => `<option value="${esc(r)}" ${r === o.default_library_role ? 'selected' : ''}>${esc(labels[r])}</option>`).join('')}</select></div></div>
-      ${libRes.length ? libRes.map(r => `<div class="res"><input type="checkbox" data-act="toggle" data-id="${esc(r.id)}" ${attachedIds.has(r.id) ? 'checked' : ''} ${r.review_status !== 'verified' ? 'disabled' : ''}>
-        <span class="nm">${esc(r.name)} ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전 — 라이브러리에서 확인 필요</span>' : ''}</span>
-        <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자</span></div>`).join('') : '<div class="muted">라이브러리가 비어 있습니다. Ops의 📚 라이브러리에서 이력서·경험 정리를 올리세요.</div>'}
+      <div id="libsel">${libSelectHtml(o, labels, attachedIds)}</div>
 
       <h3 style="margin-top:14px">이 프로젝트 전용 자료 추가 <span class="muted" style="text-transform:none">(직무 설명 등 · 붙여넣기 또는 파일·이미지)</span></h3>
       <div class="row"><div><label>역할</label><select id="own-role">${o.resource_roles.map(r => `<option value="${esc(r)}" ${r === o.default_own_role ? 'selected' : ''}>${esc(labels[r])}</option>`).join('')}</select></div>
@@ -181,6 +183,20 @@ function render() {
         <label>새 ${esc(kind[1].label)} 원문</label><textarea id="d-new" placeholder="예: 지원동기를 서술하시오 (800자 이내)"></textarea>
         <p style="margin:6px 0 0"><button data-act="d-add">추가</button></p></div></div>`;
   renderPending();
+}
+function libSelectHtml(o, labels, attachedIds) {
+  return `<h3 style="margin-top:14px">내 라이브러리에서 고르기 <span class="muted" style="text-transform:none">(검수 완료된 자료만)</span>
+      <button class="ghost sm" data-act="open-library" style="float:right;text-transform:none">자료실 열기 — 올리기 · 붙여넣기 · 확인</button></h3>
+    <div class="row"><div><label>붙일 때의 역할</label><select id="lib-role">${o.resource_roles.map(r => `<option value="${esc(r)}" ${r === o.default_library_role ? 'selected' : ''}>${esc(labels[r])}</option>`).join('')}</select></div></div>
+    ${libRes.length ? libRes.map(r => `<div class="res"><input type="checkbox" data-act="toggle" data-id="${esc(r.id)}" ${attachedIds.has(r.id) ? 'checked' : ''} ${r.review_status !== 'verified' ? 'disabled' : ''}>
+      <span class="nm">${esc(r.name)} ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전 — 자료실에서 확인 필요</span>' : ''}</span>
+      <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자</span></div>`).join('') : '<div class="muted">자료실이 비어 있습니다. 위의 <b>자료실</b>에서 이력서·경험 정리를 올리거나 붙여넣으세요.</div>'}`;
+}
+async function refreshLibSelect() {  // after the popup closes: only the picker is redrawn, so nothing typed in the forms is lost
+  libRes = await call('GET', '/api/library/resources');
+  const box = $('#libsel'); if (!box || !view) return;
+  const o = office(), attached = new Set(view.resources.map(r => r.id));
+  box.innerHTML = libSelectHtml(o, o.role_labels, attached);
 }
 function renderDeliverable(d, i, o) {
   const kind = o.deliverable_kinds[d.kind];
@@ -259,6 +275,7 @@ $('#detail').addEventListener('click', async e => {
       if (!confirm(`"${view.project.title}" 프로젝트를 삭제할까요?\n문항, 자료 연결, 이 프로젝트 전용 자료가 함께 지워집니다. (내 라이브러리 자료와 실행 기록은 그대로)`)) return;
       await call('DELETE', '/api/projects/' + pid); view = null; await loadList(); return render();
     }
+    if (act === 'open-library') return openLibrary();
     if (act === 'save-settings') return apply(call('PUT', '/api/projects/' + pid, {settings: readFields($('#settings'))}));
     if (act === 'd-draft') {
       const st = view.settings;
@@ -306,6 +323,20 @@ $('#detail').addEventListener('change', e => {
 ['dragenter', 'dragover'].forEach(ev => $('#detail').addEventListener(ev, e => { const d = e.target.closest('#drop'); if (d) { e.preventDefault(); d.classList.add('over'); } }));
 ['dragleave', 'drop'].forEach(ev => $('#detail').addEventListener(ev, e => { const d = e.target.closest('#drop'); if (d) { e.preventDefault(); d.classList.remove('over'); } }));
 $('#detail').addEventListener('drop', e => { if (e.target.closest('#drop')) uploadFiles([...e.dataTransfer.files]); });
+
+/* ---------- the 자료실 popup: my resources, managed in /resources ---------- */
+const libOpen = () => !$('#rs-modal').hidden;
+function openLibrary() { $('#rs-frame').src = '/resources'; $('#rs-modal').hidden = false; }
+async function closeLibrary() {
+  if (!libOpen()) return;
+  $('#rs-modal').hidden = true; $('#rs-frame').src = 'about:blank';
+  try { await refreshLibSelect(); } catch (e) { say(e.message, true); }
+}
+$('#open-lib').onclick = openLibrary;
+$('#rs-close').onclick = closeLibrary;
+$('#rs-modal').addEventListener('mousedown', e => { if (e.target.id === 'rs-modal') closeLibrary(); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && libOpen()) closeLibrary(); });
+addEventListener('message', e => { if (e.origin === location.origin && e.data && e.data.aiops === 'close') closeLibrary(); });
 
 /* ---------- start ---------- */
 (async () => {

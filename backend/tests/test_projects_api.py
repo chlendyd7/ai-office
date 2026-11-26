@@ -224,3 +224,10 @@ def test_a_projects_own_resources_can_be_listed_including_those_awaiting_a_check
 def test_the_projects_page_is_served(client):
     r = client.get("/projects")
     assert r.status_code == 200 and "프로젝트" in r.text and r.headers["cache-control"] == "no-store"
+
+
+def test_the_resource_room_pages_are_served(client):
+    for path, marker in (("/resources", "자료실"), ("/projects", "자료실")):
+        r = client.get(path)
+        assert r.status_code == 200 and marker in r.text and r.headers["cache-control"] == "no-store"
+    assert 'id="rs-frame"' in client.get("/projects").text and "/api/library/resources/upload" in client.get("/resources").text

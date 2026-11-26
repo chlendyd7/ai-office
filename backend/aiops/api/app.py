@@ -284,6 +284,10 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     def ops_page():
         return FileResponse(STATIC / "ops.html", headers={"Cache-Control": "no-store"})
 
+    @app.get("/resources")
+    def resources_page():
+        return FileResponse(STATIC / "resources.html", headers={"Cache-Control": "no-store"})
+
     @app.get("/projects")
     def projects_page():
         return FileResponse(STATIC / "projects.html", headers={"Cache-Control": "no-store"})
