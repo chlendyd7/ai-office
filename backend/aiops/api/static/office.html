@@ -114,7 +114,7 @@ textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:v
 </main>
 <div id="modal" hidden>
   <div class="mbox" role="dialog" aria-label="AI Ops">
-    <div class="mhead"><b>AI Ops</b><span class="sp"></span><a id="mnew" href="/ops" target="_blank">새 탭으로 ↗</a><button id="mclose">닫기 (Esc)</button></div>
+    <div class="mhead"><b id="mtitle">AI Ops</b><span class="sp"></span><a id="mnew" href="/ops" target="_blank">새 탭으로 ↗</a><button id="mclose">닫기 (Esc)</button></div>
     <iframe id="mframe" title="AI Ops"></iframe>
   </div>
 </div>
@@ -497,11 +497,19 @@ async function loadDetail(){
   $('detail').innerHTML=h;
 }
 /* AI Ops popup: the full console (timeline with prompts/responses, settings, compare, new run) without leaving Office */
-function openOps(runId){
-  const url='/ops'+(runId?'#'+encodeURIComponent(runId):'');
+function openFrame(url,title){
+  $('mtitle').textContent=title;$('mframe').title=title;
   $('mframe').src=url;$('mnew').href=url;$('modal').hidden=false;
 }
+function openOps(runId){openFrame('/ops'+(runId?'#'+encodeURIComponent(runId):''),'AI Ops')}
 function closeOps(){$('modal').hidden=true;$('mframe').src='about:blank'}
+
+/* 자료실: the bookshelf room on the floor opens "my resources" in the same popup */
+const LIB_BOX={x:222,y:8,w:96,h:64};  // floor coordinates (320x180), shelf + label
+const inLib=e=>{const r=view.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W,y=(e.clientY-r.top)/r.height*H;
+  return x>=LIB_BOX.x&&x<=LIB_BOX.x+LIB_BOX.w&&y>=LIB_BOX.y&&y<=LIB_BOX.y+LIB_BOX.h};
+view.onclick=e=>{if(inLib(e))openFrame('/resources','자료실 — 내 리소스')};
+view.onmousemove=e=>{const on=inLib(e);view.style.cursor=on?'pointer':'';view.title=on?'자료실: 내 리소스 (클릭)':''};
 $('opsbtn').onclick=()=>openOps(cur);
 
 /* continuous operation: status chip + kill switch. Starting (and any restart after a budget/failure stop) happens in AI Ops */
@@ -539,7 +547,6 @@ function refresh(){loadList().catch(()=>{});loadDetail().catch(()=>{});loadQueue
 const cycleLight=()=>{lightIdx=(lightIdx+1)%LIGHTS.length;$('lightLbl').textContent=LIGHTS[lightIdx][1]};
 $('light').onclick=cycleLight;
 addEventListener('keydown',e=>{if(e.target.closest('textarea,input'))return;if(e.key==='l'||e.key==='L')cycleLight()});
-view.onclick=null;
 
 /* ---------- 루프 ---------- */
 let last=performance.now();
