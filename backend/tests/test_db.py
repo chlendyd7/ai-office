@@ -122,3 +122,15 @@ def test_a_failed_import_changes_nothing(tmp_path):
     with pytest.raises(ValueError):
         import_dir(store.db, tmp_path / "src")
     assert store.list_runs() == []  # r1 was rolled back together with the broken r2
+
+
+def test_export_refuses_a_folder_inside_a_git_repository(tmp_path):
+    repo = tmp_path / "somerepo"
+    (repo / ".git").mkdir(parents=True)
+    db, _, _ = make_data(tmp_path)
+    with pytest.raises(ValueError, match="inside the git repository"):
+        export_dir(db, repo / "data_export")
+    assert not (repo / "data_export").exists()  # nothing was written before refusing
+    export_dir(db, repo / "data_export", allow_git=True)  # an explicit choice for a repository known to be private
+    assert (repo / "data_export" / "events").is_dir()
+    export_dir(db, tmp_path / "plain_folder")  # outside any repository: fine

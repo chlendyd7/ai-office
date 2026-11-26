@@ -1,6 +1,8 @@
 """Move data in and out of the database as plain, deterministic text files.
 
-    python -m aiops.dbio export <dir>    # data/aiops.db  ->  <dir>/events/<run_id>.jsonl, queue.jsonl,
+    python -m aiops.dbio export <dir> [--allow-git]
+                                         # (refuses a folder inside a git repository unless --allow-git: personal data)
+                                         # data/aiops.db  ->  <dir>/events/<run_id>.jsonl, queue.jsonl,
                                          #                    datasets.jsonl, items.jsonl, prompts.jsonl
     python -m aiops.dbio import <dir>    # <dir> -> data/aiops.db   (idempotent: rows that already exist are skipped;
                                          #  an edited item replaces the older copy; a conflicting prompt version fails)
@@ -22,8 +24,20 @@ def _dump(e: dict) -> str:
     return json.dumps(e, ensure_ascii=False)
 
 
-def export_dir(db: "str | Path | Database", out: str | Path) -> dict:
+def git_root(path: Path) -> Path | None:
+    """The nearest enclosing git work tree, if any."""
+    p = path.resolve()
+    return next((d for d in (p, *p.parents) if (d / ".git").exists()), None)
+
+
+def export_dir(db: "str | Path | Database", out: str | Path, allow_git: bool = False) -> dict:
+    """Refuses to write inside a git work tree unless allow_git: the export holds personal text (resumes, drafts), and a
+    repository may be public. Pass allow_git only for a folder in a repository you know is private."""
     db, out = open_db(db), Path(out)
+    root = git_root(out)
+    if root and not allow_git:
+        raise ValueError(f"{out} is inside the git repository {root}. The export contains personal data and a repository may be public: "
+                         "export to a folder outside it, or pass --allow-git if that repository is private.")
     (out / "events").mkdir(parents=True, exist_ok=True)
     counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0}
     with db.lock:
@@ -118,11 +132,17 @@ def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    allow_git = "--allow-git" in argv
+    argv = [a for a in argv if a != "--allow-git"]
     if len(argv) != 2 or argv[0] not in ("export", "import"):
         print(__doc__)
         return 2
     db = Database(Path(__file__).resolve().parents[1] / "data" / "aiops.db")  # backend/data/aiops.db, same as the app
-    print((export_dir if argv[0] == "export" else import_dir)(db, argv[1]))
+    try:
+        print(export_dir(db, argv[1], allow_git) if argv[0] == "export" else import_dir(db, argv[1]))
+    except ValueError as e:
+        print(f"error: {e}")
+        return 1
     return 0
 
 

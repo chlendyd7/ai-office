@@ -9,6 +9,7 @@
 backend/.venv/
 backend/runs/
 backend/data/
+backend/data_export/
 backend/runs_queue.jsonl
 backend/.env
 __pycache__/
