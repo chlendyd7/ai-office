@@ -56,7 +56,7 @@ aside .card{margin-top:0}
 textarea{width:100%;min-height:64px;resize:vertical;margin-top:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
 .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
 .btns button{border:0;border-radius:8px;padding:9px 20px;font-weight:700;color:#14121a}
-.btns .ok{background:var(--done)}.btns .warn{background:var(--acc)}.btns .bad{background:var(--err);color:#fff}
+.btns .go{background:var(--work)}.btns .ok{background:var(--done)}.btns .warn{background:var(--acc)}.btns .bad{background:var(--err);color:#fff}
 .btns button:disabled{opacity:.5;cursor:default}
 .errtxt{color:var(--err);margin-top:6px}
 .hist{margin:0;padding:0;list-style:none;border-left:2px solid var(--line);font-size:13px;color:var(--dim)}
@@ -239,7 +239,7 @@ function updateParts(dt){for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.a
 /* ---------- 이벤트: 서버의 office activity 스트림 -> 오피스 ---------- */
 function setState(a,s,task){a.state=s;a.task=task||null;a.goal=STATE[s].goal}
 function floorReset(){orch.awaiting=false;orch.flash=0;agents.forEach(a=>setState(a,'idle'))}
-const FLASH={approve:['승인 ✓','#46d98a'],reject:['반려','#ff6370'],revise:['수정 요청','#ffcf5c']};
+const FLASH={approve:['승인 ✓','#46d98a'],reject:['반려','#ff6370'],revise:['수정 요청','#ffcf5c'],continue:['계속 ▶','#4aa3ff']};
 const LABEL={write:'작성',review:'검토'};
 function applyActivity(ev){
   switch(ev.k){
@@ -248,7 +248,7 @@ function applyActivity(ev){
     case 'end':{const a=byId[ev.agent];if(a)setState(a,'standby');break}
     case 'gate':agents.forEach(a=>setState(a,'done'));orch.awaiting=true;break;
     case 'decision':{orch.awaiting=false;[orch.flashTxt,orch.flashCol]=FLASH[ev.decision];orch.flash=2.6;
-      if(ev.decision==='revise')agents.forEach(a=>setState(a,'standby'));break}
+      if(ev.decision==='revise'||ev.decision==='continue')agents.forEach(a=>setState(a,'standby'));break}
     case 'finished':agents.forEach(a=>setState(a,ev.status==='failed'?'error':'idle'));orch.awaiting=false;break;
   }
 }
@@ -427,8 +427,8 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const STATUS={running:'작업 중',awaiting_approval:'결정 대기',approved:'승인됨',rejected:'반려됨',failed:'실패'};
 const SCOL={running:'var(--work)',awaiting_approval:'var(--acc)',approved:'var(--done)',rejected:'var(--err)',failed:'var(--err)'};
-const REASON={passed:'기준 점수를 통과했습니다',max_rounds:'라운드 상한에 도달했습니다 (기준 미달)',budget_exceeded:'예산 한도에 도달해 중단했습니다'};
-const DEC={approve:'승인',revise:'수정 요청',reject:'반려'};
+const REASON={passed:'기준 점수를 통과했습니다',max_rounds:'라운드 상한에 도달했습니다 (기준 미달)',budget_exceeded:'예산 한도에 도달해 중단했습니다',step:'라운드가 끝났습니다 (단계 승인 모드)'};
+const DEC={approve:'승인',continue:'계속',revise:'수정 요청',reject:'반려'};
 let cur=null,manual=false,lastKey='',es=null;
 
 async function api(path,body){
@@ -484,9 +484,12 @@ async function loadDetail(){
   if(sc)h+=`<div class="score"><b style="color:${sc.passed?'var(--done)':'var(--acc)'}">${sc.total}</b><span>/ 10 · 기준 ${sc.pass_score} ${sc.passed?'✔ 통과':'✘ 미달'} · ${v.rounds}라운드</span></div>`;
   if(v.result)h+=`<h2>최종 결과물</h2><div class="result">${esc(v.result)}</div>`;
   else h+=`<div class="empty">${v.status==='failed'?'오류로 결과물이 없습니다. Ops 콘솔에서 원인을 확인하세요.':'에이전트가 작업 중입니다…'}</div>`;
-  if(v.status==='awaiting_approval')h+=`<div class="note">${esc(REASON[v.stop_reason]||v.stop_reason)}. 확정은 사람만 할 수 있습니다.</div>
-    <textarea id="comment" placeholder="수정 요청 / 반려 사유"></textarea>
-    <div class="btns"><button class="ok" data-d="approve">승인</button><button class="warn" data-d="revise">수정 요청</button><button class="bad" data-d="reject">반려</button></div><div id="derr" class="errtxt"></div>`;
+  if(v.status==='awaiting_approval'){
+    const step=v.stop_reason==='step';
+    h+=`<div class="note">${step?`라운드 ${v.rounds} 완료. <b>계속</b>하면 다음 라운드를 진행하고, <b>승인</b>하면 지금 초안이 확정됩니다.`:esc(REASON[v.stop_reason]||v.stop_reason)+'. 확정은 사람만 할 수 있습니다.'}</div>
+    <textarea id="comment" placeholder="${step?'추가 피드백 (선택) · 수정 요청/반려 사유':'수정 요청 / 반려 사유'}"></textarea>
+    <div class="btns">${step?'<button class="go" data-d="continue">계속 (다음 라운드)</button>':''}<button class="ok" data-d="approve">승인</button>${step?'':'<button class="warn" data-d="revise">수정 요청</button>'}<button class="bad" data-d="reject">반려</button></div><div id="derr" class="errtxt"></div>`;
+  }
   else if(v.status==='running')h+=`<div class="note">작업이 끝나면 여기서 결정할 수 있습니다.</div>`;
   if(v.decisions.length)h+=`<h2 style="margin-top:14px">결정 이력</h2><ul class="hist">${v.decisions.map(d=>
     `<li><time>${new Date(d.ts).toLocaleString('ko-KR')}</time><b>${DEC[d.decision]}</b> (${esc(d.actor)})${d.comment?' — '+esc(d.comment):''}</li>`).join('')}</ul>`;

@@ -112,6 +112,8 @@ svg text{fill:var(--muted);font-size:10px}
         <div><label>예산 (USD)</label><input id="f-budget" type="number" step="0.001" value="0.5"></div>
         <div id="w-delay"><label>지연 (ms/호출, 가짜)</label><input id="f-delay" type="number" min="0" value="1500"></div>
       </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px;color:var(--text)" title="라운드(작성+리뷰+채점) 하나가 끝날 때마다 멈춰서 계속/승인/반려를 고릅니다">
+        <input type="checkbox" id="f-step" style="width:auto"> 단계 승인 모드 (라운드마다 멈춤)</label>
       <details id="rubric-box" style="margin-top:10px">
         <summary class="muted" style="cursor:pointer">루브릭 편집 (<span id="rb-count">-</span>항목)</summary>
         <div id="rb-rows"></div>
@@ -168,7 +170,7 @@ svg text{fill:var(--muted);font-size:10px}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const STATUS = {running:'실행 중', awaiting_approval:'승인 대기', approved:'승인됨', rejected:'반려됨', failed:'실패'};
-const REASON = {passed:'통과', max_rounds:'라운드 상한', budget_exceeded:'예산 초과'};
+const REASON = {passed:'통과', max_rounds:'라운드 상한', budget_exceeded:'예산 초과', step:'라운드 완료 (단계 승인)'};
 const fmt = n => Number(n).toLocaleString();
 let cur = null, es = null, events = [], summary = null, tab = 'final';
 const openSeqs = new Set();
@@ -261,7 +263,7 @@ function loadIntoForm() {
   const ev = events[0]; if (!ev) return;
   const c = ev.config, inp = ev.input, set = (id, v) => { $(id).value = v ?? ''; };
   set('#f-job', inp.job); set('#f-q', inp.question); set('#f-draft', inp.draft);
-  set('#f-pass', c.pass_score); set('#f-max', c.max_rounds); set('#f-budget', c.budget_usd);
+  $('#f-step').checked = !!c.step_mode; set('#f-pass', c.pass_score); set('#f-max', c.max_rounds); set('#f-budget', c.budget_usd);
   $('#f-mode').value = c.llm.mode;
   if (c.llm.mode === 'fake') { set('#f-scn', c.llm.scenario.join(',')); set('#f-delay', c.llm.delay_ms); }
   else {
@@ -333,7 +335,7 @@ function llmCfg(scn) {
 }
 function buildOverrides(scn) {
   const ov = {pass_score: +$('#f-pass').value, max_rounds: +$('#f-max').value, budget_usd: +$('#f-budget').value, llm: llmCfg(scn),
-              rubric: rubricForRun()};
+              rubric: rubricForRun(), step_mode: $('#f-step').checked};
   if ($('#f-mode').value === 'hchat') {
     const per1k = id => { const v = $(id).value; return v === '' ? null : +v / 1000; };  // USD per 1M tokens -> per 1k
     const pm = {};
@@ -474,10 +476,11 @@ function renderGate() {
   const s = summary, el = $('#gate');
   if (!s || s.status !== 'awaiting_approval') { el.style.display = 'none'; return; }
   el.style.display = '';
-  el.innerHTML = `<h3>최종 결정 대기 — 루프 종료: ${REASON[s.stop_reason] || s.stop_reason}</h3>
+  const step = s.stop_reason === 'step';
+  el.innerHTML = `<h3>${step ? `단계 승인 — 라운드 ${s.rounds} 완료` : `최종 결정 대기 — 루프 종료: ${REASON[s.stop_reason] || s.stop_reason}`}</h3>
     <div class="muted" style="margin-bottom:6px">AI는 확정하지 못합니다. 사람이 승인해야 완료됩니다. (Office 화면에서도 같은 결정을 할 수 있음)</div>
-    <textarea id="g-comment" placeholder="수정 요청 / 반려 사유 코멘트"></textarea>
-    <p style="margin:8px 0 0"><button class="ok" data-d="approve">승인</button>
+    <textarea id="g-comment" placeholder="${step ? '추가 피드백 (선택) · 수정 요청/반려 사유' : '수정 요청 / 반려 사유 코멘트'}"></textarea>
+    <p style="margin:8px 0 0">${step ? '<button data-d="continue">계속 (다음 라운드)</button> ' : ''}<button class="ok" data-d="approve">승인</button>
     <button class="warn" data-d="revise">수정 요청</button>
     <button class="bad" data-d="reject">반려</button> <span id="g-err" class="err"></span></p>`;
 }
@@ -508,7 +511,7 @@ function renderTimeline() {
       case 'artifact': return `<div class="ev sys"><span class="t">결과물 생성</span> <span class="m">R${e.round}</span></div>`;
       case 'loop_stopped': return `<div class="ev sys"><span class="t">루프 종료</span> <span class="m">${REASON[e.reason] || e.reason}</span></div>`;
       case 'gate_opened': return `<div class="ev gate"><span class="t">승인 대기</span> <span class="m">${time}</span></div>`;
-      case 'gate_decision': return `<div class="ev gate"><span class="t">결정: ${{approve:'승인',revise:'수정 요청',reject:'반려'}[e.decision]}</span> <span class="m">${esc(e.actor)} · ${time}</span>${e.comment ? `<div>${esc(e.comment)}</div>` : ''}</div>`;
+      case 'gate_decision': return `<div class="ev gate"><span class="t">결정: ${{approve:'승인',continue:'계속',revise:'수정 요청',reject:'반려'}[e.decision]}</span> <span class="m">${esc(e.actor)} · ${time}</span>${e.comment ? `<div>${esc(e.comment)}</div>` : ''}</div>`;
       case 'run_finished': return `<div class="ev ${e.status === 'failed' ? 'err' : 'gate'}"><span class="t">실행 종료: ${STATUS[e.status] || e.status}</span> <span class="m">${esc(e.reason)}</span></div>`;
       case 'error': return `<div class="ev err"><span class="t">오류</span><pre>${esc(e.message)}</pre></div>`;
       default: return `<div class="ev sys">${esc(e.type)}</div>`;
@@ -593,6 +596,7 @@ function renderCfg() {
     <span>예산</span><span>$${c.budget_usd}</span><span>LLM</span><span>${esc(c.llm.mode)} / ${esc(c.llm.model)}</span>
     <span>단가(1k tok)</span><span>in $${c.pricing.in_per_1k} / out $${c.pricing.out_per_1k}</span>
     <span>최대 토큰/호출</span><span>${c.llm.max_tokens ?? '-'}</span>
+    <span>단계 승인 모드</span><span>${c.step_mode ? '켜짐 (라운드마다 멈춤)' : '꺼짐'}</span>
     ${c.llm.mode === 'fake' ? `<span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span>`
       : `<span>모델</span><span>${esc(c.llm.model)} (리뷰어: ${esc(c.llm.models.reviewer || c.llm.model)})</span>
          <span>모델별 단가(1k)</span><span>${esc(JSON.stringify(c.pricing_models || {}))}${missingPrice.length

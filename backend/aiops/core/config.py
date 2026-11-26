@@ -41,6 +41,7 @@ class RunConfig(BaseModel):
     pass_score: float = Field(default=8.0, ge=0, le=10)
     max_rounds: int = Field(default=3, ge=1)  # per pass (a human "revise" starts a new pass)
     budget_usd: float = Field(default=0.5, gt=0)
+    step_mode: bool = False  # pause for a human decision after every round, not only when the loop ends
 
     @field_validator("rubric")
     @classmethod

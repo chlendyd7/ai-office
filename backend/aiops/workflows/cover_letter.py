@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from ..core.jsonx import extract_json
 from ..core.metered import BudgetExceeded
-from .base import BUDGET_EXCEEDED, MAX_ROUNDS, PASSED, PassContext
+from .base import BUDGET_EXCEEDED, MAX_ROUNDS, PASSED, STEP, PassContext
 
 DEFAULT_RUBRIC = [
     {"name": "직무적합성", "weight": 0.30, "description": "지원 직무에 필요한 역량·경험과 직접 연결되는가"},
@@ -61,6 +61,24 @@ def _parse_review(raw: str, rubric) -> list[dict]:
     return out
 
 
+def _reviewer_feedback(criteria: list[dict]) -> str:
+    return "\n".join(f"- {c['name']} ({c['score']}): {c['feedback']}" for c in criteria)
+
+
+def _opening_feedback(ctx: PassContext) -> str:
+    """What the writer is told at the start of a pass. After a step gate the loop simply goes on, so the writer also gets
+    the reviewer's last feedback (a plain human revise starts from the human's comment alone, as before)."""
+    human = (ctx.feedback or "").strip()
+    last_stop = next((e["reason"] for e in reversed(ctx.events) if e["type"] == "loop_stopped"), None)
+    last_score = next((e for e in reversed(ctx.events) if e["type"] == "score"), None)
+    if last_stop == STEP and last_score:
+        parts = [_reviewer_feedback(last_score["criteria"])]
+        if human:
+            parts.append(f"[사람 피드백] {human}")
+        return "\n".join(parts)
+    return human
+
+
 class CoverLetter:
     name = "cover_letter"
 
@@ -82,7 +100,7 @@ class CoverLetter:
             "in_pass": 0,
             "review_idx": sum(1 for e in calls if e["purpose"] == "review"),
             "draft": writes[-1]["response"] if writes else inp.get("draft", ""),
-            "feedback": ctx.feedback or "",
+            "feedback": _opening_feedback(ctx),
             "passed": False,
             "stop_reason": "",
         }
@@ -119,7 +137,7 @@ class CoverLetter:
             total = round(sum(c["score"] * c["weight"] for c in criteria) / sum(c["weight"] for c in criteria), 3)
             passed = total >= cfg.pass_score
             ctx.emit("score", round=s["round"], total=total, passed=passed, pass_score=cfg.pass_score, criteria=criteria)
-            fb = "\n".join(f"- {c['name']} ({c['score']}): {c['feedback']}" for c in criteria)
+            fb = _reviewer_feedback(criteria)
             return {"feedback": fb, "passed": passed, "review_idx": s["review_idx"] + 1}
 
         def decide(s: _S) -> dict:
@@ -129,6 +147,8 @@ class CoverLetter:
                 reason = PASSED
             elif llm.over_budget():
                 reason = BUDGET_EXCEEDED
+            elif cfg.step_mode:  # the human decides after every round, so the per-pass round cap does not apply
+                reason = STEP
             elif s["in_pass"] >= cfg.max_rounds:
                 reason = MAX_ROUNDS
             else:

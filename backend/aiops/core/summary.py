@@ -19,7 +19,7 @@ def derive_status(events: list[dict]) -> str:
         t = e["type"]
         if t == "gate_opened":
             status = "awaiting_approval"
-        elif t == "gate_decision" and e["decision"] == "revise":
+        elif t == "gate_decision" and e["decision"] in ("revise", "continue"):
             status = "running"
         elif t == "run_finished":
             status = e["status"]

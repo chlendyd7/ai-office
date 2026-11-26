@@ -13,7 +13,7 @@ from .metered import MeteredLLM
 from .store import RunStore
 from .summary import derive_status
 
-DECISIONS = ("approve", "revise", "reject")
+DECISIONS = ("approve", "continue", "revise", "reject")
 
 
 class GateError(Exception):
@@ -63,18 +63,23 @@ class Engine:
     def decide(self, run_id: str, decision: str, comment: str = "", actor: str = "human") -> None:
         if decision not in DECISIONS:
             raise ValueError(f"decision must be one of {DECISIONS}")
-        status = derive_status(self.store.read(run_id))
+        events = self.store.read(run_id)
+        status = derive_status(events)
         if status != "awaiting_approval":
             raise GateError(f"run {run_id} is {status}, not awaiting_approval")
         if decision == "revise" and not comment.strip():
             raise ValueError("revise requires a comment")
+        if decision == "continue":
+            last_stop = next((e["reason"] for e in reversed(events) if e["type"] == "loop_stopped"), None)
+            if last_stop != "step":  # "continue" means "go on with the loop": only meaningful at a step gate
+                raise GateError("continue is only possible at a step gate; use revise with a comment")
         self.store.append(run_id, "gate_decision", decision=decision, comment=comment, actor=actor)
         if decision == "approve":
             self.store.append(run_id, "run_finished", status="approved", reason="approved")
         elif decision == "reject":
             self.store.append(run_id, "run_finished", status="rejected", reason=comment or "rejected")
-        else:
-            self.run_pass(run_id, feedback=comment)
+        else:  # continue | revise: another pass
+            self.run_pass(run_id, feedback=comment or None)
 
     def run_pass(self, run_id: str, feedback: str | None = None) -> None:
         events = self.store.read(run_id)

@@ -13,6 +13,7 @@ from ..core.metered import MeteredLLM
 PASSED = "passed"
 MAX_ROUNDS = "max_rounds"
 BUDGET_EXCEEDED = "budget_exceeded"
+STEP = "step"  # one round done; paused for a human because cfg.step_mode is on
 
 
 @dataclass
