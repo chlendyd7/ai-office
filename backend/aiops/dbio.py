@@ -24,10 +24,10 @@ from .core.library import RESOURCE_DEFAULTS, RESOURCE_FIELDS
 
 LIBRARY_TABLES = ("datasets", "items", "prompts", "resources", "projects", "deliverables", "project_resources")
 NON_RUN_FILES = {"queue.jsonl", *(f"{t}.jsonl" for t in LIBRARY_TABLES)}
-PROJECT_FIELDS = ("id", "office", "title", "brief", "notes", "created_at", "updated_at")
+PROJECT_FIELDS = ("id", "office", "title", "brief", "notes", "settings", "created_at", "updated_at")
 DELIVERABLE_FIELDS = ("id", "project_id", "position", "kind", "title", "spec", "final_content", "final_meta", "final_run_id", "final_at",
                       "created_at", "updated_at")
-JSON_COLUMNS = {"resources": ("meta",), "projects": ("brief",), "deliverables": ("spec", "final_meta")}  # stored as JSON text, exported as objects
+JSON_COLUMNS = {"resources": ("meta",), "projects": ("brief", "settings"), "deliverables": ("spec", "final_meta")}  # stored as JSON text, exported as objects
 
 
 def _zero() -> dict:
@@ -134,9 +134,9 @@ def _import_library(db: Database, src: Path) -> dict:
     for p in _read_lines(src / "projects.jsonl"):  # definitions: the more recently edited copy wins
         counts["projects"] += db.conn.execute(
             f"INSERT INTO projects ({', '.join(PROJECT_FIELDS)}) VALUES ({', '.join('?' * len(PROJECT_FIELDS))}) "
-            "ON CONFLICT(id) DO UPDATE SET title = excluded.title, brief = excluded.brief, notes = excluded.notes, "
+            "ON CONFLICT(id) DO UPDATE SET title = excluded.title, brief = excluded.brief, notes = excluded.notes, settings = excluded.settings, "
             "updated_at = excluded.updated_at WHERE excluded.updated_at > projects.updated_at",
-            _in("projects", PROJECT_FIELDS, p)).rowcount
+            _in("projects", PROJECT_FIELDS, p, {"settings": {}})).rowcount
     for d in _read_lines(src / "deliverables.jsonl"):
         counts["deliverables"] += db.conn.execute(
             f"INSERT INTO deliverables ({', '.join(DELIVERABLE_FIELDS)}) VALUES ({', '.join('?' * len(DELIVERABLE_FIELDS))}) "

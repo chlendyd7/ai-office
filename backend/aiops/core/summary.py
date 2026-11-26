@@ -43,7 +43,8 @@ def summarize(events: list[dict]) -> dict:
             _add(by_round.setdefault(e["round"], _bucket()), e)
             _add(by_model.setdefault(e["model"], _bucket()), e)
         elif t == "score":
-            scores.append({"round": e["round"], "total": e["total"], "passed": e["passed"], "criteria": e["criteria"]})
+            scores.append({"round": e["round"], "total": e["total"], "passed": e["passed"], "criteria": e["criteria"],
+                           "blocked_by": e.get("blocked_by", []), "checks": e.get("checks")})  # why a high score did not pass: code checks
         elif t == "loop_stopped":
             stop_reason = e["reason"]
         elif t == "artifact":

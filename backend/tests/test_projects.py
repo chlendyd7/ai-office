@@ -27,13 +27,13 @@ def mk(px, title="A사 · 데이터 엔지니어"):
 # ---- schema versions ----
 def test_a_new_database_reaches_the_latest_version_and_reopening_changes_nothing(tmp_path):
     db = Database(tmp_path / "x.db")
-    assert db.version() == max(dbmod.MIGRATIONS) == 2
+    assert db.version() == max(dbmod.MIGRATIONS) == 3
     tables = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"projects", "deliverables", "project_resources", "resources", "events"} <= tables
     db.conn.execute("INSERT INTO projects (id, office, title, created_at, updated_at) VALUES ('p', 'career', 't', 'x', 'x')")
     db.close()
     again = Database(tmp_path / "x.db")
-    assert again.version() == 2 and again.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+    assert again.version() == 3 and again.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
 
 
 def test_a_v1_database_is_upgraded_in_place_and_keeps_every_row(tmp_path):
@@ -46,7 +46,7 @@ def test_a_v1_database_is_upgraded_in_place_and_keeps_every_row(tmp_path):
     old.commit()
     old.close()
     db = Database(path)
-    assert db.version() == 2
+    assert db.version() == 3
     r = Library(db).get_resource("r1")
     assert (r["name"], r["text"], r["meta"], r["owner_project_id"]) == ("옛 이력서", "내용", {}, "")
     assert db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1

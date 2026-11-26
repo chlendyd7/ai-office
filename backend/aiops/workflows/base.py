@@ -75,13 +75,22 @@ def clean_fields(fields: list[dict], raw: dict) -> dict:
                 continue
         if f.get("options") and v not in f["options"]:
             raise ValueError(f"'{f['name']}' must be one of {', '.join(map(str, f['options']))} (got {v!r})")
-        if f.get("type") == "number":
+        if f.get("type") == "number":  # a whole number, positive unless the field says `min`
             try:
                 v = int(float(v))
             except (TypeError, ValueError):
                 raise ValueError(f"'{f['name']}' must be a number, got {v!r}")
-            if v <= 0:
-                raise ValueError(f"'{f['name']}' must be positive")
+            if v < f.get("min", 1):
+                raise ValueError(f"'{f['name']}' must be positive" if "min" not in f else f"'{f['name']}' must be at least {f['min']}")
+        elif f.get("type") == "decimal":  # any number, within `min` / `max` when given
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f"'{f['name']}' must be a number, got {v!r}")
+            if v < f.get("min", float("-inf")) or v > f.get("max", float("inf")):
+                raise ValueError(f"'{f['name']}' must be between {f.get('min', '-inf')} and {f.get('max', 'inf')}")
+        elif f.get("type") == "bool":
+            v = v.lower() in ("1", "true", "on", "yes") if isinstance(v, str) else bool(v)
         out[f["name"]] = v
     return out
 

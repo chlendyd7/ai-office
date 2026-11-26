@@ -37,20 +37,21 @@ class Projects:
         self.library = Library(self.db)
 
     # ---- projects ----
-    def create_project(self, office: str, title: str, brief: dict | None = None, notes: str = "") -> str:
+    def create_project(self, office: str, title: str, brief: dict | None = None, notes: str = "", settings: dict | None = None) -> str:
         office, title = _need(office, "office"), _need(title, "project title")
         pid, now = uuid.uuid4().hex[:10], _now()
         with self.db.lock:
-            self.db.conn.execute("INSERT INTO projects (id, office, title, brief, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                 (pid, office, title, _j(brief or {}), notes, now, now))
+            self.db.conn.execute("INSERT INTO projects (id, office, title, brief, notes, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (pid, office, title, _j(brief or {}), notes, _j(settings or {}), now, now))
         return pid
 
     def get_project(self, project_id: str) -> dict:
         with self.db.lock:
-            r = self.db.conn.execute("SELECT id, office, title, brief, notes, created_at, updated_at FROM projects WHERE id = ?", (project_id,)).fetchone()
+            r = self.db.conn.execute("SELECT id, office, title, brief, notes, created_at, updated_at, settings FROM projects WHERE id = ?", (project_id,)).fetchone()
         if not r:
             raise KeyError(project_id)
-        return {"id": r[0], "office": r[1], "title": r[2], "brief": json.loads(r[3]), "notes": r[4], "created_at": r[5], "updated_at": r[6]}
+        return {"id": r[0], "office": r[1], "title": r[2], "brief": json.loads(r[3]), "notes": r[4], "created_at": r[5], "updated_at": r[6],
+                "settings": json.loads(r[7])}
 
     def list_projects(self, office: str | None = None) -> list[dict]:
         """Newest edit first, with how many deliverables there are and how many already have an approved final."""
@@ -61,12 +62,14 @@ class Projects:
         return [{"id": a, "office": b, "title": c, "brief": json.loads(d), "created_at": e, "updated_at": f, "deliverables": n, "finals": fin}
                 for a, b, c, d, e, f, n, fin in rows]
 
-    def update_project(self, project_id: str, title: str | None = None, brief: dict | None = None, notes: str | None = None) -> dict:
+    def update_project(self, project_id: str, title: str | None = None, brief: dict | None = None, notes: str | None = None,
+                       settings: dict | None = None) -> dict:
         cur = self.get_project(project_id)
         with self.db.lock:
-            self.db.conn.execute("UPDATE projects SET title = ?, brief = ?, notes = ?, updated_at = ? WHERE id = ?",
+            self.db.conn.execute("UPDATE projects SET title = ?, brief = ?, notes = ?, settings = ?, updated_at = ? WHERE id = ?",
                                  (_need(cur["title"] if title is None else title, "project title"),
-                                  _j(cur["brief"] if brief is None else brief), cur["notes"] if notes is None else notes, _now(), project_id))
+                                  _j(cur["brief"] if brief is None else brief), cur["notes"] if notes is None else notes,
+                                  _j(cur["settings"] if settings is None else settings), _now(), project_id))
         return self.get_project(project_id)
 
     def delete_project(self, project_id: str) -> dict:

@@ -138,6 +138,8 @@ MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX events_project_id ON events (json_extract(data, '$.project_id')) WHERE type = 'run_started'",
         "CREATE INDEX events_project_run ON events (json_extract(data, '$.project_run')) WHERE type = 'run_started'",
     ],
+    # v3: per-project settings (models per agent, loop settings...), declared by the office, stored as JSON
+    3: ["ALTER TABLE projects ADD COLUMN settings TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(settings))"],
 }
 
 

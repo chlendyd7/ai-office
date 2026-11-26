@@ -33,6 +33,8 @@ class FakeLLM:
         return LLMResult(text=text, tokens_in=_est_tokens(prompt), tokens_out=_est_tokens(text))
 
     def _write(self, meta: dict) -> str:
+        if meta.get("grounded"):  # a project run: say only what the material says (no invented figures), like an honest writer
+            return f"{meta.get('original') or meta.get('evidence_head', '')}\n[개선본]"
         fb = (meta.get("feedback") or "").strip().replace("\n", " ")[:80]
         return f"{meta.get('original', '')}\n[R{meta['round']} 개선본] 반영한 피드백: {fb or '없음'}"
 
