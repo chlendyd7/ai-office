@@ -28,13 +28,31 @@ class _S(TypedDict):
     stop_reason: str
 
 
+def _limit(inp: dict) -> int | None:
+    try:
+        return int(inp["max_chars"]) or None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _length_note(inp: dict, draft: str) -> str:
+    """Measured by code: an LLM reviewer cannot count characters, and a limit is a fact, not an opinion."""
+    lim = _limit(inp)
+    if not lim:
+        return ""
+    n = len(draft)
+    return f"[실제 글자 수] {n}자 (제한 {lim}자, {f'초과 {n - lim}자' if n > lim else '준수'})\n"
+
+
 def _writer_prompt(inp: dict, draft: str, feedback: str) -> str:
-    limit = f"[분량 제한] {inp['max_chars']}자 이내\n" if inp.get("max_chars") else ""
+    limit = f"[분량 제한] {_limit(inp)}자 이내\n" if _limit(inp) else ""
     return (
         "당신은 자기소개서 작성 전문가입니다. 아래 문항에 맞게 자기소개서를 개선하세요.\n"
         f"[지원 직무] {inp.get('job', '')}\n[문항] {inp.get('question', '')}\n{limit}"
         f"[현재 초안]\n{draft}\n"
         f"[피드백]\n{feedback or '없음 (첫 작성)'}\n"
+        "[규칙] 지원자가 제공한 초안과 사람 피드백에 없는 경험·수치·기술·성과를 지어내지 마세요. "
+        "구체화가 필요하지만 근거가 없으면 [수치 입력 필요]처럼 빈칸으로 표시하세요.\n"
         "개선된 자기소개서 본문만 출력하세요."
     )
 
@@ -45,7 +63,7 @@ def _reviewer_prompt(inp: dict, draft: str, rubric) -> str:
         "당신은 엄격한 자기소개서 심사위원입니다. 루브릭 각 항목을 0~10점으로 채점하고, "
         "항목별로 개선 방향을 한 문장으로 적어 JSON으로만 출력하세요.\n"
         f"[지원 직무] {inp.get('job', '')}\n[문항] {inp.get('question', '')}\n"
-        f"[루브릭]\n{rb}\n[자기소개서]\n{draft}\n"
+        f"[루브릭]\n{rb}\n[자기소개서]\n{draft}\n{_length_note(inp, draft)}"
         '출력 형식: {"criteria":[{"name":"항목명","score":0-10,"feedback":"..."}]}'
     )
 
@@ -138,6 +156,8 @@ class CoverLetter:
             passed = total >= cfg.pass_score
             ctx.emit("score", round=s["round"], total=total, passed=passed, pass_score=cfg.pass_score, criteria=criteria)
             fb = _reviewer_feedback(criteria)
+            if _limit(inp) and len(s["draft"]) > _limit(inp):  # code-measured, so the writer is told even if the reviewer missed it
+                fb += f"\n- 분량: {_length_note(inp, s['draft']).strip()} 반드시 줄이세요."
             return {"feedback": fb, "passed": passed, "review_idx": s["review_idx"] + 1}
 
         def decide(s: _S) -> dict:
