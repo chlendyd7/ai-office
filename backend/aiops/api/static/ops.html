@@ -88,6 +88,9 @@ select{width:100%;background:var(--panel2);border:1px solid var(--line);border-r
 .chip{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:0 8px;font:12px var(--mono);margin:2px 4px 2px 0}
 .fixed{background:var(--panel2);border:1px dashed var(--line);border-radius:6px;padding:8px;font:12px/1.5 var(--mono);white-space:pre-wrap;color:var(--muted)}
 .ver{padding:1px 8px;font-size:12px}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:22px 12px;text-align:center;color:var(--muted);cursor:pointer}
+.drop.over{border-color:var(--accent);background:var(--panel2);color:var(--text)}
+.it.sel{background:var(--panel2);border-radius:6px}
 </style>
 </head>
 <body>
@@ -187,10 +190,39 @@ select{width:100%;background:var(--panel2);border:1px solid var(--line);border-r
 <div id="lib-modal" class="modal" style="display:none">
   <div class="modal-box">
     <div class="modal-head"><b>📚 라이브러리</b>
-      <span class="tabs" style="margin:0 0 0 14px"><button data-lt="ds" class="on">데이터셋</button><button data-lt="pr" class="ghost">프롬프트</button></span>
+      <span class="tabs" style="margin:0 0 0 14px"><button data-lt="rs" class="on">리소스</button><button data-lt="ds" class="ghost">데이터셋</button><button data-lt="pr" class="ghost">프롬프트</button></span>
       <button class="ghost" id="lib-close" style="margin-left:auto">닫기 (Esc)</button></div>
 
-    <div id="lib-ds">
+    <div id="lib-rs">
+      <div class="lib-grid">
+        <div>
+          <div class="card" style="margin-bottom:10px"><h3>내 리소스 (이력서·경험 정리 등)</h3>
+            <div id="rs-drop" class="drop">PDF · TXT · MD 파일을 여기로 끌어다 놓거나 <u>클릭해서 고르기</u><input id="rs-file" type="file" multiple accept=".pdf,.txt,.md,.markdown" style="display:none"></div>
+            <div id="rs-msg" class="muted" style="font-size:12px;margin:6px 0"></div>
+            <div id="rs-list" style="max-height:340px;overflow:auto"></div>
+          </div>
+        </div>
+        <div>
+          <div class="card" style="margin-bottom:10px"><h3 id="rs-title">내용 확인 · 교정</h3>
+            <div id="rs-empty" class="muted" style="font-size:12px">왼쪽에서 리소스를 고르세요.</div>
+            <div id="rs-edit" style="display:none">
+              <div class="muted" style="font-size:12px;margin-bottom:4px">추출된 글자를 읽고 틀린 곳을 고치세요. <b>이 글자가 자소서의 근거로 쓰입니다.</b></div>
+              <label>이름</label><input id="rs-name">
+              <label>내용 <span id="rs-info" class="muted"></span></label><textarea id="rs-text" style="min-height:300px;font:12px/1.55 var(--mono)"></textarea>
+              <p style="margin:8px 0 0"><button id="rs-save" type="button">저장</button> <button class="ghost" id="rs-del" type="button">삭제</button></p>
+            </div>
+            <div id="rs-err" class="err" style="font-size:12px;margin-top:4px"></div>
+          </div>
+          <div class="card" style="margin-bottom:10px"><h3>붙여넣어 추가</h3>
+            <label>이름</label><input id="rs-pname" placeholder="예: 프로젝트 경험 정리">
+            <textarea id="rs-ptext" style="min-height:90px" placeholder="텍스트를 붙여넣기"></textarea>
+            <p style="margin:6px 0 0"><button class="ghost" id="rs-padd" type="button">추가</button></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="lib-ds" style="display:none">
       <div class="inl"><select id="ds-sel"></select><button class="ghost" id="ds-del" type="button">데이터셋 삭제</button></div>
       <div class="inl"><input id="ds-new" placeholder="새 데이터셋 이름"><button id="ds-create" type="button">만들기</button></div>
       <div id="ds-err" class="err" style="font-size:12px"></div>
@@ -722,12 +754,12 @@ async function loadPromptOptions() {  // the prompt choices in the "새 실행" 
 }
 const libOpen = () => $('#lib-modal').style.display !== 'none';
 function libTab(t) {
-  $('#lib-ds').style.display = t === 'ds' ? '' : 'none'; $('#lib-pr').style.display = t === 'pr' ? '' : 'none';
+  for (const k of ['rs', 'ds', 'pr']) $('#lib-' + k).style.display = t === k ? '' : 'none';
   document.querySelectorAll('[data-lt]').forEach(b => b.className = b.dataset.lt === t ? 'on' : 'ghost');
 }
 async function openLib(tab) {
-  $('#lib-modal').style.display = ''; libTab(tab || 'ds');
-  try { await ensureSpec(); await Promise.all([loadDatasets(), loadPrompts()]); } catch (e) { $('#ds-err').textContent = e.message; }
+  $('#lib-modal').style.display = ''; libTab(tab || 'rs');
+  try { await ensureSpec(); await Promise.all([loadResources(), loadDatasets(), loadPrompts()]); } catch (e) { $('#ds-err').textContent = e.message; }
 }
 const closeLib = () => { $('#lib-modal').style.display = 'none'; };
 $('#b-lib').onclick = () => openLib();
@@ -735,6 +767,63 @@ $('#lib-close').onclick = closeLib;
 $('#lib-modal').addEventListener('mousedown', e => { if (e.target.id === 'lib-modal') closeLib(); });
 document.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => libTab(b.dataset.lt));
 addEventListener('keydown', e => { if (e.key === 'Escape' && libOpen()) { closeLib(); e.stopPropagation(); } }, true);
+
+/* resources: files become text the user can read and correct */
+let resources = [], rsId = '';
+const rsErr = e => { $('#rs-err').textContent = e ? e.message : ''; };
+const tokensOf = chars => Math.ceil(chars / 2);  // rough: the same "2 chars per token" worst case the budget guard uses
+async function loadResources(keep) {
+  resources = await api('/api/library/resources');
+  if (keep !== undefined) rsId = keep;
+  if (!resources.some(r => r.id === rsId)) rsId = '';
+  $('#rs-list').innerHTML = resources.length ? resources.map(r => `
+    <div class="it ${r.id === rsId ? 'sel' : ''}" data-id="${esc(r.id)}" style="cursor:pointer"><div class="tx"><b>${esc(r.name)}</b>
+      <small>${esc(r.source_type.toUpperCase())}${r.pages ? ` · ${r.pages}쪽` : ''} · ${fmt(r.chars)}자 (≈${fmt(tokensOf(r.chars))} 토큰)${r.source_name ? ' · ' + esc(r.source_name) : ''}</small></div></div>`).join('')
+    : '<div class="muted">리소스가 없습니다. 파일을 끌어다 놓거나 아래에 붙여넣어 추가하세요.</div>';
+  await showResource();
+}
+async function showResource() {
+  $('#rs-edit').style.display = rsId ? '' : 'none'; $('#rs-empty').style.display = rsId ? 'none' : '';
+  if (!rsId) return;
+  const r = await api('/api/library/resources/' + rsId);
+  $('#rs-name').value = r.name; $('#rs-text').value = r.text; updRsInfo();
+}
+const updRsInfo = () => { const n = $('#rs-text').value.trim().length; $('#rs-info').textContent = `(${fmt(n)}자 · 호출마다 입력에 들어가면 ≈${fmt(tokensOf(n))} 토큰씩 비용이 붙음)`; };
+$('#rs-text').addEventListener('input', updRsInfo);
+const fileToBase64 = f => new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(',')[1]); rd.onerror = () => no(rd.error); rd.readAsDataURL(f); });
+async function uploadFiles(files) {
+  const msgs = []; let last;
+  for (const f of files) {
+    try {
+      if (f.size > 10 * 1024 * 1024) throw new Error('파일이 너무 큽니다 (최대 10MB)');
+      const r = await call('POST', '/api/library/resources/upload', {filename: f.name, data: await fileToBase64(f)});
+      msgs.push(`✔ ${f.name} → ${fmt(r.chars)}자${r.pages ? `, ${r.pages}쪽` : ''}${r.warnings.length ? ' ⚠ ' + r.warnings.join('; ') : ''}`); last = r.id;
+    } catch (e) { msgs.push(`✘ ${f.name}: ${e.message}`); }
+  }
+  $('#rs-msg').innerHTML = msgs.map(esc).join('<br>'); rsErr();
+  await loadResources(last);
+}
+$('#rs-drop').onclick = () => $('#rs-file').click();
+$('#rs-file').onchange = e => { uploadFiles([...e.target.files]); e.target.value = ''; };
+['dragenter', 'dragover'].forEach(ev => $('#rs-drop').addEventListener(ev, e => { e.preventDefault(); $('#rs-drop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => $('#rs-drop').addEventListener(ev, e => { e.preventDefault(); $('#rs-drop').classList.remove('over'); }));
+$('#rs-drop').addEventListener('drop', e => uploadFiles([...e.dataTransfer.files]));
+$('#rs-list').onclick = e => { const el = e.target.closest('.it'); if (el) { rsId = el.dataset.id; rsErr(); loadResources(rsId); } };
+$('#rs-save').onclick = async () => {
+  try { await call('PUT', '/api/library/resources/' + rsId, {name: $('#rs-name').value, text: $('#rs-text').value}); rsErr(); $('#rs-msg').textContent = '저장됨'; await loadResources(rsId); }
+  catch (e) { rsErr(e); }
+};
+$('#rs-del').onclick = async () => {
+  const r = resources.find(x => x.id === rsId);
+  if (!r || !confirm(`"${r.name}" 리소스를 삭제할까요? (이미 시작한 작업은 자기 복사본을 가지고 있어 영향 없음)`)) return;
+  try { await call('DELETE', '/api/library/resources/' + rsId); rsErr(); await loadResources(''); } catch (e) { rsErr(e); }
+};
+$('#rs-padd').onclick = async () => {
+  try {
+    const {id} = await call('POST', '/api/library/resources', {name: $('#rs-pname').value, text: $('#rs-ptext').value});
+    $('#rs-pname').value = ''; $('#rs-ptext').value = ''; rsErr(); await loadResources(id);
+  } catch (e) { rsErr(e); }
+};
 
 /* datasets */
 async function loadDatasets(keep) {

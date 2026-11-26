@@ -91,7 +91,7 @@ def test_import_is_idempotent_and_export_is_deterministic(tmp_path):
     fresh = Database(tmp_path / "fresh.db")
     import_dir(fresh, tmp_path / "o1")
     again = import_dir(fresh, tmp_path / "o1")  # second time: nothing new
-    assert again == {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0}
+    assert again == {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0, "resources": 0}
 
 
 def test_export_never_deletes_what_is_already_there(tmp_path):

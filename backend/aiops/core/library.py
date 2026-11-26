@@ -22,6 +22,22 @@ def _split_ref(ref: str) -> tuple[str, int | None]:
     return name, (int(v) if v else None)
 
 
+RESOURCE_FIELDS = ("id", "name", "source_name", "source_type", "pages", "text", "created_at", "updated_at")
+
+
+def _check_resource(name: str, text: str) -> tuple[str, str]:
+    from .extract import MAX_CHARS
+
+    name, text = name.strip(), text.strip()
+    if not name:
+        raise ValueError("resource name is empty")
+    if not text:
+        raise ValueError("resource text is empty")
+    if len(text) > MAX_CHARS:
+        raise ValueError(f"resource text is too long ({len(text):,} chars, max {MAX_CHARS:,})")
+    return name, text
+
+
 class Library:
     def __init__(self, db: "str | Database"):
         self.db = open_db(db)
@@ -113,6 +129,41 @@ class Library:
         self.get_item(item_id)
         with self.db.lock:
             self.db.conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+
+    # ---- resources: the user's own material (resume, experience notes), stored as text so it can be corrected ----
+    def add_resource(self, name: str, text: str, source_name: str = "", source_type: str = "paste", pages: int | None = None) -> str:
+        name, text = _check_resource(name, text)
+        rid, now = uuid.uuid4().hex[:10], _now()
+        with self.db.lock:
+            self.db.conn.execute(f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (rid, name, source_name, source_type, pages, text, now, now))
+        return rid
+
+    def list_resources(self) -> list[dict]:
+        """Without the text (it can be long): id, name, type, chars."""
+        with self.db.lock:
+            rows = self.db.conn.execute("SELECT id, name, source_name, source_type, pages, length(text), created_at, updated_at "
+                                        "FROM resources ORDER BY created_at, rowid").fetchall()
+        return [dict(zip(("id", "name", "source_name", "source_type", "pages", "chars", "created_at", "updated_at"), r)) for r in rows]
+
+    def get_resource(self, resource_id: str) -> dict:
+        with self.db.lock:
+            r = self.db.conn.execute(f"SELECT {', '.join(RESOURCE_FIELDS)} FROM resources WHERE id = ?", (resource_id,)).fetchone()
+        if not r:
+            raise KeyError(resource_id)
+        return dict(zip(RESOURCE_FIELDS, r))
+
+    def update_resource(self, resource_id: str, name: str | None = None, text: str | None = None) -> dict:
+        cur = self.get_resource(resource_id)
+        name, text = _check_resource(cur["name"] if name is None else name, cur["text"] if text is None else text)
+        with self.db.lock:
+            self.db.conn.execute("UPDATE resources SET name = ?, text = ?, updated_at = ? WHERE id = ?", (name, text, _now(), resource_id))
+        return self.get_resource(resource_id)
+
+    def delete_resource(self, resource_id: str) -> None:
+        self.get_resource(resource_id)
+        with self.db.lock:
+            self.db.conn.execute("DELETE FROM resources WHERE id = ?", (resource_id,))
 
     # ---- prompts ----
     def save_prompt(self, workflow: str, role: str, name: str, body: str, note: str = "") -> int:
@@ -207,3 +258,4 @@ def parse_import(fmt: str, text: str) -> list[dict]:
             raw = {k: v for k, v in r.items() if k != "label"}
             out.append({"label": str(r.get("label") or ""), "raw": raw})
     return out
+

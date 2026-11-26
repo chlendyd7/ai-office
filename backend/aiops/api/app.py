@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..core.config import LLMConfig, deep_merge
 from ..core.engine import Engine, GateError
 from ..core.env import load_env_file
+from ..core.extract import extract_text
 from ..core.jobqueue import JobQueue, Worker
 from ..core.library import Library, parse_import
 from ..core.pricing import load_prices, read_pricing_file
@@ -62,6 +64,21 @@ class PromptReq(BaseModel):
     name: str
     body: str = Field(max_length=100_000)
     note: str = ""
+
+
+class ResourceReq(BaseModel):  # pasted text
+    name: str
+    text: str = Field(max_length=400_000)
+
+
+class ResourceUpdateReq(BaseModel):
+    name: str | None = None
+    text: str | None = Field(default=None, max_length=400_000)
+
+
+class UploadReq(BaseModel):  # the file travels as base64 inside JSON: no multipart dependency
+    filename: str = Field(max_length=300)
+    data: str = Field(max_length=15_000_000)
 
 
 class DatasetRunReq(BaseModel):
@@ -393,6 +410,57 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
             return {"name": req.name.strip(), "version": library.save_prompt(req.workflow, req.role, req.name, req.body, req.note)}
         except ValueError as e:
             raise HTTPException(400, str(e))
+
+    # ---- resources: the user's own material, as text ----
+    def resource_or_404(resource_id: str) -> dict:
+        try:
+            return library.get_resource(resource_id)
+        except KeyError:
+            raise HTTPException(404, f"resource not found: {resource_id}")
+
+    @app.get("/api/library/resources")
+    def resources_list():
+        return library.list_resources()
+
+    @app.get("/api/library/resources/{resource_id}")
+    def resources_get(resource_id: str):
+        return resource_or_404(resource_id)
+
+    @app.post("/api/library/resources")
+    def resources_paste(req: ResourceReq):
+        try:
+            return {"id": library.add_resource(req.name, req.text)}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/library/resources/upload")
+    def resources_upload(req: UploadReq):
+        """TXT / MD / PDF -> text, stored so the user can read and correct it. Scanned PDFs and other formats are refused with a reason."""
+        try:
+            raw = base64.b64decode(req.data, validate=True)
+        except ValueError:
+            raise HTTPException(400, "the file data is not valid base64")
+        try:
+            ex = extract_text(req.filename, raw)
+            name = PurePath(req.filename).stem or "resource"
+            rid = library.add_resource(name, ex["text"], source_name=req.filename, source_type=ex["source_type"], pages=ex["pages"])
+        except ValueError as e:  # ExtractError is a ValueError
+            raise HTTPException(400, str(e))
+        return {"id": rid, "name": name, "chars": len(ex["text"]), "pages": ex["pages"], "source_type": ex["source_type"], "warnings": ex["warnings"]}
+
+    @app.put("/api/library/resources/{resource_id}")
+    def resources_update(resource_id: str, req: ResourceUpdateReq):
+        resource_or_404(resource_id)
+        try:
+            return library.update_resource(resource_id, req.name, req.text)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.delete("/api/library/resources/{resource_id}")
+    def resources_delete(resource_id: str):
+        resource_or_404(resource_id)
+        library.delete_resource(resource_id)
+        return {"ok": True}
 
     @app.get("/api/runs")
     def list_runs():

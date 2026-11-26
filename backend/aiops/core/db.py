@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS items (          -- one input for a workflow; free to
 );
 CREATE INDEX IF NOT EXISTS items_by_dataset ON items (dataset_id);
 
+CREATE TABLE IF NOT EXISTS resources (      -- the user's own material (resume, experience notes): text only, correctable
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    source_name TEXT NOT NULL DEFAULT '',   -- original file name, '' when pasted
+    source_type TEXT NOT NULL,              -- txt | md | pdf | paste
+    pages       INTEGER,
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS prompts (        -- every save is a new immutable version
     name       TEXT NOT NULL,
     version    INTEGER NOT NULL,

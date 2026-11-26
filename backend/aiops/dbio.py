@@ -3,7 +3,7 @@
     python -m aiops.dbio export <dir> [--allow-git]
                                          # (refuses a folder inside a git repository unless --allow-git: personal data)
                                          # data/aiops.db  ->  <dir>/events/<run_id>.jsonl, queue.jsonl,
-                                         #                    datasets.jsonl, items.jsonl, prompts.jsonl
+                                         #                    datasets.jsonl, items.jsonl, prompts.jsonl, resources.jsonl
     python -m aiops.dbio import <dir>    # <dir> -> data/aiops.db   (idempotent: rows that already exist are skipped;
                                          #  an edited item replaces the older copy; a conflicting prompt version fails)
 
@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from .core.db import Database, open_db
+from .core.library import RESOURCE_FIELDS
 
 
 def _dump(e: dict) -> str:
@@ -39,7 +40,7 @@ def export_dir(db: "str | Path | Database", out: str | Path, allow_git: bool = F
         raise ValueError(f"{out} is inside the git repository {root}. The export contains personal data and a repository may be public: "
                          "export to a folder outside it, or pass --allow-git if that repository is private.")
     (out / "events").mkdir(parents=True, exist_ok=True)
-    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0}
+    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0, "resources": 0}
     with db.lock:
         by_run: dict[str, list[str]] = {}
         for run_id, seq, ts, type_, data in db.conn.execute("SELECT run_id, seq, ts, type, data FROM events ORDER BY run_id, seq"):
@@ -58,6 +59,7 @@ def export_dir(db: "str | Path | Database", out: str | Path, allow_git: bool = F
                       for i, d, lb, js, c, u in db.conn.execute("SELECT id, dataset_id, label, data, created_at, updated_at FROM items ORDER BY id")],
             "prompts": [dict(zip(("name", "version", "workflow", "role", "body", "note", "created_at"), r))
                         for r in db.conn.execute("SELECT name, version, workflow, role, body, note, created_at FROM prompts ORDER BY name, version")],
+            "resources": [dict(zip(RESOURCE_FIELDS, r)) for r in db.conn.execute(f"SELECT {', '.join(RESOURCE_FIELDS)} FROM resources ORDER BY id")],
         }
     for table, rows in lib.items():
         (out / f"{table}.jsonl").write_text("".join(_dump(r) + "\n" for r in rows), encoding="utf-8", newline="\n")
@@ -72,7 +74,7 @@ def _read_lines(path: Path) -> list[dict]:
 def _import_library(db: Database, src: Path) -> dict:
     """Datasets and prompts are insert-only; an item is updated when the incoming copy is newer. A prompt version that
     exists with different text is a real conflict (two machines saved different texts as the same version): fail loudly."""
-    counts = {"datasets": 0, "items": 0, "prompts": 0}
+    counts = {"datasets": 0, "items": 0, "prompts": 0, "resources": 0}
     for d in _read_lines(src / "datasets.jsonl"):
         counts["datasets"] += db.conn.execute("INSERT OR IGNORE INTO datasets (id, name, workflow, created_at) VALUES (?, ?, ?, ?)",
                                               (d["id"], d["name"], d["workflow"], d["created_at"])).rowcount
@@ -92,13 +94,19 @@ def _import_library(db: Database, src: Path) -> dict:
         counts["prompts"] += db.conn.execute(
             "INSERT OR IGNORE INTO prompts (name, version, workflow, role, body, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (p["name"], p["version"], p["workflow"], p["role"], p["body"], p["note"], p["created_at"])).rowcount
+    for r in _read_lines(src / "resources.jsonl"):  # like items: the more recently edited copy wins
+        counts["resources"] += db.conn.execute(
+            f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET name = excluded.name, text = excluded.text, updated_at = excluded.updated_at "
+            "WHERE excluded.updated_at > resources.updated_at",
+            tuple(r[f] for f in RESOURCE_FIELDS)).rowcount
     return counts
 
 
 def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
     db, src = open_db(db), Path(src)
     run_dir = src / "events" if (src / "events").is_dir() else src  # a legacy runs/ folder is a flat set of <run_id>.jsonl
-    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0}
+    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0, "resources": 0}
     with db.lock:
         db.conn.execute("BEGIN")
         try:
