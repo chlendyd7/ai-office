@@ -4,6 +4,8 @@ AI may run loops; only a human decision finalizes a run.
 """
 from __future__ import annotations
 
+import logging
+
 from typing import Callable
 
 from ..llm.factory import make_llm
@@ -14,6 +16,9 @@ from .store import RunStore
 from .summary import derive_status
 
 DECISIONS = ("approve", "continue", "revise", "reject")
+
+
+log = logging.getLogger("aiops.engine")
 
 
 class GateError(Exception):
@@ -27,6 +32,7 @@ class Engine:
         self.workflows = workflows
         self.llm_factory = llm_factory
         self.prices = prices or {}  # verified per-model prices; become part of each run's config snapshot
+        self.on_approved: Callable[[str], None] | None = None  # called with the run id once a human has approved it (the app files the result)
 
     def validate(self, workflow: str, overrides: dict | None = None) -> RunConfig:
         """Resolve the final config and fail fast (bad rubric, unknown mode, missing env) before anything is recorded."""
@@ -54,12 +60,13 @@ class Engine:
         self.run_pass(run_id, feedback=None)
         return run_id
 
-    def create(self, workflow: str, input: dict, overrides: dict | None = None, parent: str | None = None) -> str:
-        """Record the run (config snapshot + input) without running it. Lets callers run the first pass in background."""
+    def create(self, workflow: str, input: dict, overrides: dict | None = None, parent: str | None = None, link: dict | None = None) -> str:
+        """Record the run (config snapshot + input) without running it. Lets callers run the first pass in background.
+        `link`: extra fields for `run_started` that tie the run to something outside it (a project and its deliverable)."""
         cfg = self.validate(workflow, overrides)
         run_id = self.store.new_run_id()
         self.store.append(run_id, "run_started", run_id=run_id, workflow=workflow, config=cfg.model_dump(), input=input,
-                          parent=parent)  # parent: the run this one re-executes (None for a fresh run)
+                          parent=parent, **(link or {}))  # parent: the run this one re-executes (None for a fresh run)
         return run_id
 
     def decide(self, run_id: str, decision: str, comment: str = "", actor: str = "human") -> None:
@@ -78,6 +85,11 @@ class Engine:
         self.store.append(run_id, "gate_decision", decision=decision, comment=comment, actor=actor)
         if decision == "approve":
             self.store.append(run_id, "run_finished", status="approved", reason="approved")
+            if self.on_approved:
+                try:
+                    self.on_approved(run_id)
+                except Exception:  # the approval is already recorded and must stand; filing the result is best effort and logged
+                    log.exception("could not file the approved result of %s", run_id)
         elif decision == "reject":
             self.store.append(run_id, "run_finished", status="rejected", reason=comment or "rejected")
         else:  # continue | revise: another pass

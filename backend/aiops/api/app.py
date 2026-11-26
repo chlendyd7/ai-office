@@ -97,13 +97,19 @@ class ProjectReq(BaseModel):
     office: str
     brief: dict = Field(default_factory=dict)
     notes: str = ""
+    settings: dict = Field(default_factory=dict)
     title: str | None = None  # default: the office builds it from the brief ("회사 · 직무")
 
 
 class ProjectUpdateReq(BaseModel):
     brief: dict | None = None
+    settings: dict | None = None
     notes: str | None = None
     title: str | None = None
+
+
+class DraftReq(BaseModel):
+    confirm_real: bool = False  # a run with the real gateway costs money: it must be asked for on purpose
 
 
 class DeliverableReq(BaseModel):
@@ -189,6 +195,21 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
         worker.start_thread()
     library = Library(store.db)
     projects = Projects(store.db)
+    def file_result(run_id: str) -> None:
+        """A human approved a run that came from a project's deliverable: its result becomes that deliverable's final, measured by the office."""
+        events = store.read(run_id)
+        did = events[0].get("deliverable_id")
+        result = summarize(events)["result"]
+        if not did or not result:
+            return
+        try:
+            d = projects.get_deliverable(did)
+            office = OFFICES[projects.get_project(d["project_id"])["office"]]
+        except KeyError:  # the deliverable (or project) was deleted while the run was waiting: the approval stands, there is nowhere to file it
+            return
+        projects.set_final(did, result["content"], office.measure(d["kind"], d["spec"], result["content"]), run_id)
+
+    eng.on_approved = file_result
     app = FastAPI(title="AI Ops")
     app.state.worker, app.state.queue = worker, queue
 
@@ -583,9 +604,18 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     def project_view(project_id: str) -> dict:
         p = project_or_404(project_id)
         ds, rs = projects.list_deliverables(project_id), projects.list_project_resources(project_id)
-        # the office says what is still missing; `status` is "draft" until the pipeline can run (derived from run records later)
-        return {"project": p, "deliverables": ds, "resources": rs, "status": "draft",
-                "readiness": office_or_400(p["office"]).check_project(p["brief"], ds, rs)}
+        office = office_or_400(p["office"])
+        runs: dict[str, list[dict]] = {}
+        for rid in store.runs_with("project_id", project_id):  # newest first
+            ev = store.read(rid)
+            sm = summarize(ev)
+            last = sm["scores"][-1] if sm["scores"] else None
+            runs.setdefault(ev[0].get("deliverable_id", ""), []).append({
+                "run_id": rid, "status": sm["status"], "stop_reason": sm["stop_reason"], "rounds": sm["rounds"], "cost_usd": sm["totals"]["cost_usd"],
+                "score": last["total"] if last else None, "blocked_by": last["blocked_by"] if last else [], "error": sm["error"]})
+        # the office says what is still missing; `status` is "draft" until the whole pipeline can run (derived from run records later)
+        return {"project": p, "deliverables": ds, "resources": rs, "status": "draft", "runs": runs,
+                "settings": office.clean_settings(p["settings"]), "readiness": office.check_project(p["brief"], ds, rs)}
 
     def clean(fn, *args, **kwargs):
         try:
@@ -605,7 +635,8 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     def projects_create(req: ProjectReq):
         office = office_or_400(req.office)
         brief = clean(office.clean_brief, req.brief)
-        pid = clean(projects.create_project, office.key, req.title or office.title_for(brief), brief, req.notes)
+        settings = clean(office.clean_settings, req.settings)
+        pid = clean(projects.create_project, office.key, req.title or office.title_for(brief), brief, req.notes, settings)
         return project_view(pid)
 
     @app.get("/api/projects/{project_id}")
@@ -617,7 +648,8 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
         office = office_or_400(project_or_404(project_id)["office"])
         brief = clean(office.clean_brief, req.brief) if req.brief is not None else None
         title = req.title if req.title is not None else (office.title_for(brief) if brief is not None else None)
-        clean(projects.update_project, project_id, title, brief, req.notes)
+        settings = clean(office.clean_settings, {**project_or_404(project_id)["settings"], **req.settings}) if req.settings is not None else None
+        clean(projects.update_project, project_id, title, brief, req.notes, settings)
         return project_view(project_id)
 
     @app.delete("/api/projects/{project_id}")
@@ -665,6 +697,32 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
         d = deliverable_or_404(deliverable_id)
         projects.clear_final(deliverable_id)
         return project_view(d["project_id"])
+
+    @app.post("/api/projects/{project_id}/deliverables/{deliverable_id}/draft")
+    def deliverable_draft(project_id: str, deliverable_id: str, req: DraftReq):
+        """Start writing one deliverable (a cover-letter answer) from the project's verified material, with the project's settings.
+        Nothing starts if the office says the project is not ready; a run on the real gateway must be confirmed (`confirm_real`)."""
+        p = project_or_404(project_id)
+        office = office_or_400(p["office"])
+        d = deliverable_or_404(deliverable_id)
+        if d["project_id"] != project_id:
+            raise HTTPException(404, f"deliverable not found in this project: {deliverable_id}")
+        ready = office.check_project(p["brief"], projects.list_deliverables(project_id), projects.list_project_resources(project_id))
+        if ready["blocking"]:
+            raise HTTPException(400, "시작할 수 없습니다: " + "; ".join(ready["blocking"]))
+        settings = clean(office.clean_settings, p["settings"])
+        if settings["mode"] == "hchat" and not req.confirm_real:
+            raise HTTPException(400, f"실제 LLM 호출은 비용이 듭니다 (문항 하나 예산 ${settings['budget_usd']}). confirm_real=true 로 확인해 주세요")
+        workflow = clean(office.kind, d["kind"])["workflow"]
+        inp = clean(office.input_for, p, d, clean(projects.snapshot_inputs, project_id))
+        overrides = office.overrides_for(settings)
+        refs = {role: settings[f"prompt_{role}"] for role in ("writer", "reviewer") if settings.get(f"prompt_{role}")}
+        try:
+            run_id = eng.create(workflow, inp, with_prompts(workflow, overrides, refs), link={"project_id": project_id, "deliverable_id": deliverable_id})
+        except (ValidationError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        threading.Thread(target=eng.run_pass, args=(run_id,), daemon=True).start()
+        return {"run_id": run_id, "mode": settings["mode"], "budget_usd": settings["budget_usd"]}
 
     @app.post("/api/projects/{project_id}/resources")
     def project_attach(project_id: str, req: AttachReq):

@@ -12,7 +12,7 @@ def office_view(s: dict) -> dict:
         "status": s["status"],
         "stop_reason": s["stop_reason"],
         "error": bool(s["error"]),  # detail stays in Ops
-        "job": s["input"].get("job", ""),
+        "job": s["input"].get("title") or s["input"].get("job", ""),  # a project run is shown under its project's title
         "question": s["input"].get("question", ""),
         "result": s["result"]["content"] if s["result"] and not running else None,
         "score": {"total": last["total"], "pass_score": s["pass_score"], "passed": last["passed"]} if last else None,

@@ -24,6 +24,10 @@ class Office:
     role_labels: dict[str, str] = field(default_factory=dict)  # for screens: role key -> what to call it
     default_library_role: str = ""  # the role a resource picked from my library gets unless told otherwise
     default_own_role: str = ""  # the role of text or a file given for this project alone
+    agents: list[dict] = field(default_factory=list)  # who works here: {"key", "label", "stage", "prompt_role"}; their models are in the settings
+    run_settings_fields: list[dict] = field(default_factory=list)  # a project's settings (models per agent, loop limits, budget...)
+    run_overrides: Callable[[dict], dict] | None = None  # cleaned settings -> overrides for the workflow's RunConfig
+    build_input: Callable[[dict, dict, dict], dict] | None = None  # (project, deliverable, snapshot) -> the workflow input of one run
 
     def clean_brief(self, raw: dict) -> dict:
         return clean_fields(self.brief_fields, raw)
@@ -54,7 +58,22 @@ class Office:
                 "role_labels": {r: self.role_labels.get(r, r) for r in self.resource_roles},
                 "default_library_role": self.default_library_role or self.resource_roles[0],
                 "default_own_role": self.default_own_role or self.resource_roles[0],
+                "agents": self.agents, "run_settings_fields": self.run_settings_fields,
                 "deliverable_kinds": {k: {"label": v["label"], "workflow": v["workflow"], "spec_fields": v["spec_fields"]} for k, v in self.deliverable_kinds.items()}}
+
+    def clean_settings(self, raw: dict) -> dict:
+        """Settings with every default filled in, so a screen always shows what will actually be used."""
+        return clean_fields(self.run_settings_fields, raw)
+
+    def overrides_for(self, settings: dict) -> dict:
+        return self.run_overrides(self.clean_settings(settings)) if self.run_overrides else {}
+
+    def input_for(self, project: dict, deliverable: dict, snapshot: dict) -> dict:
+        """What one run of a deliverable is given (cover letter: the question, the company, the job description and the passages
+        of the user's verified material that matter for it)."""
+        if not self.build_input:
+            raise ValueError(f"office {self.key!r} cannot run deliverables yet")
+        return self.build_input(project, deliverable, snapshot)
 
     def check_role(self, role: str) -> None:
         if role not in self.resource_roles:

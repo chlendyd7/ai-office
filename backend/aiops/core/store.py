@@ -56,6 +56,15 @@ class RunStore:
             raise KeyError(run_id)
         return [{"seq": s, "ts": ts, "type": t, **json.loads(d)} for s, ts, t, d in rows]
 
+    def runs_with(self, key: str, value: str) -> list[str]:
+        """Runs whose `run_started` carries `key` == `value` (newest first). Only the keys that have an index."""
+        if key not in ("project_id", "project_run"):
+            raise ValueError(f"no index for {key!r}")
+        with self.db.lock:
+            # run ids carry the start time to the second only: two runs started in one second are told apart by the event's own millisecond time
+            rows = self.db.conn.execute(f"SELECT run_id FROM events WHERE type = 'run_started' AND json_extract(data, '$.{key}') = ? ORDER BY ts DESC, run_id DESC", (value,))
+            return [r[0] for r in rows]
+
     def list_runs(self) -> list[str]:
         with self.db.lock:
             return [r[0] for r in self.db.conn.execute("SELECT DISTINCT run_id FROM events ORDER BY run_id")]
