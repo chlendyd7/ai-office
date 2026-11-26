@@ -1,7 +1,9 @@
 """Move data in and out of the database as plain, deterministic text files.
 
-    python -m aiops.dbio export <dir>    # data/aiops.db  ->  <dir>/events/<run_id>.jsonl, <dir>/queue.jsonl
-    python -m aiops.dbio import <dir>    # <dir> -> data/aiops.db   (idempotent: rows that already exist are skipped)
+    python -m aiops.dbio export <dir>    # data/aiops.db  ->  <dir>/events/<run_id>.jsonl, queue.jsonl,
+                                         #                    datasets.jsonl, items.jsonl, prompts.jsonl
+    python -m aiops.dbio import <dir>    # <dir> -> data/aiops.db   (idempotent: rows that already exist are skipped;
+                                         #  an edited item replaces the older copy; a conflicting prompt version fails)
 
 The text layout is also the old file-per-run format, so a legacy `runs/` folder imports as it is. Export is
 deterministic (same rows -> byte-identical files), so it diffs and merges sensibly in git, unlike the binary .db.
@@ -23,7 +25,7 @@ def _dump(e: dict) -> str:
 def export_dir(db: "str | Path | Database", out: str | Path) -> dict:
     db, out = open_db(db), Path(out)
     (out / "events").mkdir(parents=True, exist_ok=True)
-    counts = {"runs": 0, "events": 0, "queue_events": 0}
+    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0}
     with db.lock:
         by_run: dict[str, list[str]] = {}
         for run_id, seq, ts, type_, data in db.conn.execute("SELECT run_id, seq, ts, type, data FROM events ORDER BY run_id, seq"):
@@ -34,13 +36,55 @@ def export_dir(db: "str | Path | Database", out: str | Path) -> dict:
         counts["events"] += len(lines)
     (out / "queue.jsonl").write_text("".join(q + "\n" for q in queue), encoding="utf-8", newline="\n")
     counts.update(runs=len(by_run), queue_events=len(queue))
+    with db.lock:
+        lib = {
+            "datasets": [dict(zip(("id", "name", "workflow", "created_at"), r))
+                         for r in db.conn.execute("SELECT id, name, workflow, created_at FROM datasets ORDER BY id")],
+            "items": [{"id": i, "dataset_id": d, "label": lb, "data": json.loads(js), "created_at": c, "updated_at": u}
+                      for i, d, lb, js, c, u in db.conn.execute("SELECT id, dataset_id, label, data, created_at, updated_at FROM items ORDER BY id")],
+            "prompts": [dict(zip(("name", "version", "workflow", "role", "body", "note", "created_at"), r))
+                        for r in db.conn.execute("SELECT name, version, workflow, role, body, note, created_at FROM prompts ORDER BY name, version")],
+        }
+    for table, rows in lib.items():
+        (out / f"{table}.jsonl").write_text("".join(_dump(r) + "\n" for r in rows), encoding="utf-8", newline="\n")
+        counts[table] = len(rows)
+    return counts
+
+
+def _read_lines(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
+
+
+def _import_library(db: Database, src: Path) -> dict:
+    """Datasets and prompts are insert-only; an item is updated when the incoming copy is newer. A prompt version that
+    exists with different text is a real conflict (two machines saved different texts as the same version): fail loudly."""
+    counts = {"datasets": 0, "items": 0, "prompts": 0}
+    for d in _read_lines(src / "datasets.jsonl"):
+        counts["datasets"] += db.conn.execute("INSERT OR IGNORE INTO datasets (id, name, workflow, created_at) VALUES (?, ?, ?, ?)",
+                                              (d["id"], d["name"], d["workflow"], d["created_at"])).rowcount
+    for it in _read_lines(src / "items.jsonl"):
+        if not db.conn.execute("SELECT 1 FROM datasets WHERE id = ?", (it["dataset_id"],)).fetchone():
+            raise ValueError(f"item {it['id']} belongs to dataset {it['dataset_id']}, which is not in the database "
+                             "(a dataset with the same name but another id may already exist)")
+        counts["items"] += db.conn.execute(
+            "INSERT INTO items (id, dataset_id, label, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET label = excluded.label, data = excluded.data, updated_at = excluded.updated_at "
+            "WHERE excluded.updated_at > items.updated_at",
+            (it["id"], it["dataset_id"], it["label"], json.dumps(it["data"], ensure_ascii=False), it["created_at"], it["updated_at"])).rowcount
+    for p in _read_lines(src / "prompts.jsonl"):
+        have = db.conn.execute("SELECT body FROM prompts WHERE name = ? AND version = ?", (p["name"], p["version"])).fetchone()
+        if have and have[0] != p["body"]:
+            raise ValueError(f"prompt {p['name']}@{p['version']} exists with different text; save one of them as a new version first")
+        counts["prompts"] += db.conn.execute(
+            "INSERT OR IGNORE INTO prompts (name, version, workflow, role, body, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (p["name"], p["version"], p["workflow"], p["role"], p["body"], p["note"], p["created_at"])).rowcount
     return counts
 
 
 def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
     db, src = open_db(db), Path(src)
     run_dir = src / "events" if (src / "events").is_dir() else src  # a legacy runs/ folder is a flat set of <run_id>.jsonl
-    counts = {"runs": 0, "events": 0, "queue_events": 0}
+    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0}
     with db.lock:
         db.conn.execute("BEGIN")
         try:
@@ -65,6 +109,7 @@ def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
                         i, ts = e.pop("id"), e.pop("ts")
                         counts["queue_events"] += db.conn.execute("INSERT OR IGNORE INTO queue_events (id, ts, data) VALUES (?, ?, ?)",
                                                                   (i, ts, json.dumps(e, ensure_ascii=False))).rowcount
+            counts.update(_import_library(db, src))
             db.conn.execute("COMMIT")
         except BaseException:
             db.conn.execute("ROLLBACK")

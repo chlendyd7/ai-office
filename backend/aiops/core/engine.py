@@ -34,6 +34,8 @@ class Engine:
         base = deep_merge({"pricing_models": self.prices}, wf.default_config())
         cfg = RunConfig.model_validate(deep_merge(base, overrides or {}))
         self.llm_factory(cfg.llm)
+        if hasattr(wf, "check_config"):
+            wf.check_config(cfg)  # e.g. prompt templates with unknown or missing variables
         return cfg
 
     def recover_interrupted(self) -> list[str]:

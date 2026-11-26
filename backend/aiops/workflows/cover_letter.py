@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from ..core.jsonx import extract_json
 from ..core.metered import BudgetExceeded
-from .base import BUDGET_EXCEEDED, MAX_ROUNDS, PASSED, STEP, PassContext
+from .base import BUDGET_EXCEEDED, MAX_ROUNDS, PASSED, STEP, PassContext, check_template, clean_fields, render
 
 DEFAULT_RUBRIC = [
     {"name": "직무적합성", "weight": 0.30, "description": "지원 직무에 필요한 역량·경험과 직접 연결되는가"},
@@ -44,28 +44,49 @@ def _length_note(inp: dict, draft: str) -> str:
     return f"[실제 글자 수] {n}자 (제한 {lim}자, {f'초과 {n - lim}자' if n > lim else '준수'})\n"
 
 
-def _writer_prompt(inp: dict, draft: str, feedback: str) -> str:
-    limit = f"[분량 제한] {_limit(inp)}자 이내\n" if _limit(inp) else ""
-    return (
-        "당신은 자기소개서 작성 전문가입니다. 아래 문항에 맞게 자기소개서를 개선하세요.\n"
-        f"[지원 직무] {inp.get('job', '')}\n[문항] {inp.get('question', '')}\n{limit}"
-        f"[현재 초안]\n{draft}\n"
-        f"[피드백]\n{feedback or '없음 (첫 작성)'}\n"
-        "[규칙] 지원자가 제공한 초안과 사람 피드백에 없는 경험·수치·기술·성과를 지어내지 마세요. "
-        "구체화가 필요하지만 근거가 없으면 [수치 입력 필요]처럼 빈칸으로 표시하세요.\n"
-        "개선된 자기소개서 본문만 출력하세요."
-    )
+WRITER_TEMPLATE = (
+    "당신은 자기소개서 작성 전문가입니다. 아래 문항에 맞게 자기소개서를 개선하세요.\n"
+    "[지원 직무] {{job}}\n[문항] {{question}}\n{{limit}}[현재 초안]\n{{draft}}\n[피드백]\n{{feedback}}\n"
+)
+# Fixed in code, not editable: the guard against invented experience, and the output instruction.
+WRITER_FIXED = (
+    "[규칙] 지원자가 제공한 초안과 사람 피드백에 없는 경험·수치·기술·성과를 지어내지 마세요. "
+    "구체화가 필요하지만 근거가 없으면 [수치 입력 필요]처럼 빈칸으로 표시하세요.\n"
+    "개선된 자기소개서 본문만 출력하세요."
+)
+REVIEWER_TEMPLATE = (
+    "당신은 엄격한 자기소개서 심사위원입니다. 루브릭 각 항목을 0~10점으로 채점하고, "
+    "항목별로 개선 방향을 한 문장으로 적어 JSON으로만 출력하세요.\n"
+    "[지원 직무] {{job}}\n[문항] {{question}}\n[루브릭]\n{{rubric}}\n[자기소개서]\n{{draft}}\n"
+)
+# Fixed in code: the code-measured length line, and the JSON shape the parser depends on.
+REVIEWER_FORMAT = '출력 형식: {"criteria":[{"name":"항목명","score":0-10,"feedback":"..."}]}'
+REVIEWER_FIXED = "(코드가 측정한 [실제 글자 수] 줄이 자동으로 붙음)\n" + REVIEWER_FORMAT
+
+INPUT_FIELDS = [
+    {"name": "job", "label": "지원 직무", "type": "text", "required": True},
+    {"name": "question", "label": "문항", "type": "textarea", "required": True},
+    {"name": "draft", "label": "초안 (비우면 처음부터 작성)", "type": "textarea", "required": False},
+    {"name": "max_chars", "label": "분량 제한(자)", "type": "number", "required": False},
+]
+PROMPT_ROLES = {
+    "writer": {"label": "작성자 (writer)", "default": WRITER_TEMPLATE, "vars": ["job", "question", "limit", "draft", "feedback"],
+               "required": ["draft", "feedback"], "fixed": WRITER_FIXED},
+    "reviewer": {"label": "심사자 (reviewer)", "default": REVIEWER_TEMPLATE, "vars": ["job", "question", "rubric", "draft"],
+                 "required": ["draft", "rubric"], "fixed": REVIEWER_FIXED},
+}
 
 
-def _reviewer_prompt(inp: dict, draft: str, rubric) -> str:
+def _writer_prompt(inp: dict, draft: str, feedback: str, template: str = WRITER_TEMPLATE) -> str:
+    values = {"job": inp.get("job", ""), "question": inp.get("question", ""), "draft": draft,
+              "limit": f"[분량 제한] {_limit(inp)}자 이내\n" if _limit(inp) else "", "feedback": feedback or "없음 (첫 작성)"}
+    return render(template, values).rstrip("\n") + "\n" + WRITER_FIXED
+
+
+def _reviewer_prompt(inp: dict, draft: str, rubric, template: str = REVIEWER_TEMPLATE) -> str:
     rb = "\n".join(f"- {c.name} (가중치 {c.weight}): {c.description}" for c in rubric)
-    return (
-        "당신은 엄격한 자기소개서 심사위원입니다. 루브릭 각 항목을 0~10점으로 채점하고, "
-        "항목별로 개선 방향을 한 문장으로 적어 JSON으로만 출력하세요.\n"
-        f"[지원 직무] {inp.get('job', '')}\n[문항] {inp.get('question', '')}\n"
-        f"[루브릭]\n{rb}\n[자기소개서]\n{draft}\n{_length_note(inp, draft)}"
-        '출력 형식: {"criteria":[{"name":"항목명","score":0-10,"feedback":"..."}]}'
-    )
+    values = {"job": inp.get("job", ""), "question": inp.get("question", ""), "rubric": rb, "draft": draft}
+    return render(template, values).rstrip("\n") + "\n" + _length_note(inp, draft) + REVIEWER_FORMAT
 
 
 def _parse_review(raw: str, rubric) -> list[dict]:
@@ -99,6 +120,18 @@ def _opening_feedback(ctx: PassContext) -> str:
 
 class CoverLetter:
     name = "cover_letter"
+    input_fields = INPUT_FIELDS
+    prompt_roles = PROMPT_ROLES
+
+    def clean_input(self, raw: dict) -> dict:
+        return clean_fields(INPUT_FIELDS, raw)
+
+    def check_config(self, cfg) -> None:
+        for role, text in cfg.prompts.items():
+            spec = PROMPT_ROLES.get(role)
+            if not spec:
+                raise ValueError(f"unknown prompt role {role!r} (roles: {', '.join(PROMPT_ROLES)})")
+            check_template(role, text, spec["vars"], spec["required"])
 
     def default_config(self) -> dict:
         return {
@@ -130,7 +163,7 @@ class CoverLetter:
                     agent="writer",
                     purpose="write",
                     round=r,
-                    prompt=_writer_prompt(inp, s["draft"], s["feedback"]),
+                    prompt=_writer_prompt(inp, s["draft"], s["feedback"], cfg.prompts.get("writer", WRITER_TEMPLATE)),
                     meta={"original": inp.get("draft", ""), "feedback": s["feedback"], "round": r},
                 )
             except BudgetExceeded:  # refused before sending: nothing was spent
@@ -146,7 +179,7 @@ class CoverLetter:
                     agent="reviewer",
                     purpose="review",
                     round=s["round"],
-                    prompt=_reviewer_prompt(inp, s["draft"], cfg.rubric),
+                    prompt=_reviewer_prompt(inp, s["draft"], cfg.rubric, cfg.prompts.get("reviewer", REVIEWER_TEMPLATE)),
                     meta={"rubric": [c.name for c in cfg.rubric], "review_index": s["review_idx"], "round": s["round"]},
                 )
             except BudgetExceeded:

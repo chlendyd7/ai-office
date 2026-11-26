@@ -42,6 +42,8 @@ class RunConfig(BaseModel):
     max_rounds: int = Field(default=3, ge=1)  # per pass (a human "revise" starts a new pass)
     budget_usd: float = Field(default=0.5, gt=0)
     step_mode: bool = False  # pause for a human decision after every round, not only when the loop ends
+    prompts: dict[str, str] = Field(default_factory=dict)  # role -> template text; a role left out uses the workflow's built-in prompt
+    prompt_refs: dict[str, str] = Field(default_factory=dict)  # role -> "name@version" it came from (provenance only)
 
     @field_validator("rubric")
     @classmethod

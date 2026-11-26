@@ -25,6 +25,40 @@ CREATE TABLE IF NOT EXISTS queue_events (
     data TEXT NOT NULL               -- JSON incl. the event type
 );
 
+-- editable library -----------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS datasets (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    workflow   TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS items (          -- one input for a workflow; free to edit and delete (runs keep their own copy)
+    id         TEXT PRIMARY KEY,
+    dataset_id TEXT NOT NULL,
+    label      TEXT NOT NULL DEFAULT '',
+    data       TEXT NOT NULL,               -- JSON: the workflow input
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS items_by_dataset ON items (dataset_id);
+
+CREATE TABLE IF NOT EXISTS prompts (        -- every save is a new immutable version
+    name       TEXT NOT NULL,
+    version    INTEGER NOT NULL,
+    workflow   TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (name, version)
+) WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS prompts_no_update BEFORE UPDATE ON prompts
+BEGIN SELECT RAISE(ABORT, 'a prompt version is immutable: save a new version instead'); END;
+CREATE TRIGGER IF NOT EXISTS prompts_no_delete BEFORE DELETE ON prompts
+BEGIN SELECT RAISE(ABORT, 'a prompt version is immutable'); END;
+
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'the run record is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
