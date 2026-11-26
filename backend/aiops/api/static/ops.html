@@ -75,6 +75,19 @@ svg text{fill:var(--muted);font-size:10px}
 .rb .rb-d{grid-column:1/4;font-size:12px}
 .rb button{padding:2px 0}
 .result{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;line-height:1.7;font-size:13px}
+select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;color:var(--text);font:inherit}
+.modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding:4vh 12px;overflow:auto}
+.modal-box{background:var(--bg);border:1px solid var(--line);border-radius:12px;width:min(980px,100%);padding:14px 16px}
+.modal-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.inl{display:flex;gap:8px;align-items:center;margin:6px 0}.inl input,.inl select{flex:1}
+.lib-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:14px}
+@media (max-width:900px){.lib-grid{grid-template-columns:1fr}}
+.it{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-bottom:1px dashed var(--line)}
+.it input[type=checkbox]{width:auto;margin-top:4px}.it .tx{flex:1;min-width:0}.it small{color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.it button{padding:2px 8px;font-size:12px}
+.chip{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:0 8px;font:12px var(--mono);margin:2px 4px 2px 0}
+.fixed{background:var(--panel2);border:1px dashed var(--line);border-radius:6px;padding:8px;font:12px/1.5 var(--mono);white-space:pre-wrap;color:var(--muted)}
+.ver{padding:1px 8px;font-size:12px}
 </style>
 </head>
 <body>
@@ -84,7 +97,7 @@ svg text{fill:var(--muted);font-size:10px}
 <main>
   <section>
     <div class="card">
-      <h3>새 실행</h3>
+      <h3>새 실행 <button class="ghost" id="b-lib" type="button" style="float:right;padding:2px 10px;font-size:12px">📚 라이브러리</button></h3>
       <label>LLM</label>
       <select id="f-mode"><option value="fake">가짜 (키 불필요, 무료)</option><option value="hchat">H Chat (실제 호출 · 과금)</option></select>
       <div id="real-box" style="display:none">
@@ -106,6 +119,11 @@ svg text{fill:var(--muted);font-size:10px}
       <label>지원 직무</label><input id="f-job" value="데이터 엔지니어">
       <label>문항</label><input id="f-q" value="지원동기를 작성하세요">
       <label>초안</label><textarea id="f-draft">저는 데이터에 관심이 많아 지원했습니다. 대학 시절 프로젝트에서 데이터를 다뤄 본 경험이 있습니다.</textarea>
+      <label>분량 제한 (자, 비우면 제한 없음 · 글자 수는 코드가 직접 셈)</label><input id="f-maxchars" type="number" min="1" placeholder="예: 500">
+      <div class="row">
+        <div><label>작성자 프롬프트</label><select id="f-pw"><option value="">기본 (내장)</option></select></div>
+        <div><label>리뷰어 프롬프트</label><select id="f-pr"><option value="">기본 (내장)</option></select></div>
+      </div>
       <div class="row">
         <div><label>통과 점수</label><input id="f-pass" type="number" step="0.1" value="8"></div>
         <div><label>라운드 상한</label><input id="f-max" type="number" min="1" value="3"></div>
@@ -165,6 +183,64 @@ svg text{fill:var(--muted);font-size:10px}
     </div>
   </section>
 </main>
+
+<div id="lib-modal" class="modal" style="display:none">
+  <div class="modal-box">
+    <div class="modal-head"><b>📚 라이브러리</b>
+      <span class="tabs" style="margin:0 0 0 14px"><button data-lt="ds" class="on">데이터셋</button><button data-lt="pr" class="ghost">프롬프트</button></span>
+      <button class="ghost" id="lib-close" style="margin-left:auto">닫기 (Esc)</button></div>
+
+    <div id="lib-ds">
+      <div class="inl"><select id="ds-sel"></select><button class="ghost" id="ds-del" type="button">데이터셋 삭제</button></div>
+      <div class="inl"><input id="ds-new" placeholder="새 데이터셋 이름"><button id="ds-create" type="button">만들기</button></div>
+      <div id="ds-err" class="err" style="font-size:12px"></div>
+      <div id="ds-body" class="lib-grid" style="display:none">
+        <div>
+          <div class="card" style="margin-bottom:10px"><h3>항목 <span id="it-count" class="muted"></span></h3>
+            <div id="it-list" style="max-height:340px;overflow:auto"></div>
+            <p style="margin:10px 0 0"><button id="ds-enq" type="button">선택 항목 큐에 등록 (선택 없으면 전체)</button>
+              <span id="ds-enq-msg" class="muted" style="font-size:12px"></span></p>
+            <div class="muted" style="font-size:11px;margin-top:4px">LLM·루브릭·예산·통과 점수·프롬프트 선택은 "새 실행" 폼의 현재 값이 적용됩니다. 등록 시점의 입력과 프롬프트 본문이 각 작업에 복사됩니다.</div>
+          </div>
+        </div>
+        <div>
+          <div class="card" style="margin-bottom:10px"><h3 id="it-form-title">항목 추가</h3><div id="it-form"></div>
+            <label>라벨 (선택, 목록 표시용)</label><input id="it-label">
+            <p style="margin:8px 0 0"><button id="it-save" type="button">추가</button> <button class="ghost" id="it-cancel" type="button" style="display:none">수정 취소</button></p>
+          </div>
+          <div class="card" style="margin-bottom:10px"><h3>CSV / JSON 가져오기</h3>
+            <div class="muted" style="font-size:12px">CSV는 첫 줄이 헤더(<span id="imp-cols"></span>, label). JSON은 객체 배열. 한 건이라도 잘못되면 전체가 취소됩니다.</div>
+            <div class="inl"><input id="imp-file" type="file" accept=".csv,.json,.txt"><select id="imp-fmt" style="max-width:90px"><option value="csv">CSV</option><option value="json">JSON</option></select></div>
+            <textarea id="imp-text" style="min-height:90px" placeholder="파일을 고르거나 여기에 붙여넣기"></textarea>
+            <p style="margin:6px 0 0"><button class="ghost" id="imp-go" type="button">가져오기</button></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="lib-pr" style="display:none">
+      <div class="lib-grid">
+        <div>
+          <div class="card" style="margin-bottom:10px"><h3>저장된 프롬프트</h3>
+            <label>역할</label><select id="pr-role"></select>
+            <div id="pr-list" style="margin-top:8px"></div>
+          </div>
+          <div class="card" style="margin-bottom:10px"><h3>사용 가능 변수</h3><div id="pr-vars"></div>
+            <h3 style="margin-top:10px">고정 규칙 (코드가 자동으로 뒤에 붙임 · 수정 불가)</h3><div id="pr-fixed" class="fixed"></div></div>
+        </div>
+        <div>
+          <div class="card" style="margin-bottom:10px"><h3>편집 → 새 버전으로 저장</h3>
+            <label>이름 (같은 이름으로 저장하면 버전이 올라감)</label><input id="pr-name" placeholder="예: 격식체-작성자">
+            <label>본문 <span id="pr-from" class="muted"></span></label><textarea id="pr-body" style="min-height:260px;font:12px/1.55 var(--mono)"></textarea>
+            <label>메모 (무엇을 바꿨나)</label><input id="pr-note">
+            <p style="margin:8px 0 0"><button id="pr-save" type="button">새 버전으로 저장</button> <button class="ghost" id="pr-default" type="button">내장 기본값 불러오기</button></p>
+            <div id="pr-err" class="err" style="font-size:12px;margin-top:4px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -234,7 +310,8 @@ async function openCompare(a, b) {
   }).join('');
   const ca = Object.fromEntries(flat(A.events[0].config)), cb = Object.fromEntries(flat(B.events[0].config));
   const diffKeys = [...new Set([...Object.keys(ca), ...Object.keys(cb)])].filter(k => ca[k] !== cb[k]);
-  const fmtCfg = (k, v) => v === undefined ? '—' : k === 'rubric' ? JSON.parse(v).map(r => `${r.name}(${r.weight})`).join(', ') : v;
+  const fmtCfg = (k, v) => v === undefined ? '—' : k === 'rubric' ? JSON.parse(v).map(r => `${r.name}(${r.weight})`).join(', ')
+    : k.startsWith('prompts.') ? `(직접 지정한 본문 ${JSON.parse(v).length}자)` : v;
   const lastCrit = R => Object.fromEntries((R.summary.scores.at(-1)?.criteria || []).map(c => [c.name, c.score]));
   const cra = lastCrit(A), crb = lastCrit(B);
   const critRows = [...new Set([...Object.keys(cra), ...Object.keys(crb)])].map(n => {
@@ -262,7 +339,10 @@ $('#cmp').onclick = e => { if (e.target.id === 'b-cmp-close') $('#cmp').style.di
 function loadIntoForm() {
   const ev = events[0]; if (!ev) return;
   const c = ev.config, inp = ev.input, set = (id, v) => { $(id).value = v ?? ''; };
-  set('#f-job', inp.job); set('#f-q', inp.question); set('#f-draft', inp.draft);
+  set('#f-job', inp.job); set('#f-q', inp.question); set('#f-draft', inp.draft); set('#f-maxchars', inp.max_chars);
+  const refs = c.prompt_refs || {};  // the exact versions this run used (pinned), so a re-run isolates what you change
+  const pick = (id, ref) => { const s = $(id); s.value = ref || ''; if (s.value !== (ref || '')) s.value = ''; };
+  pick('#f-pw', refs.writer); pick('#f-pr', refs.reviewer);
   $('#f-step').checked = !!c.step_mode; set('#f-pass', c.pass_score); set('#f-max', c.max_rounds); set('#f-budget', c.budget_usd);
   $('#f-mode').value = c.llm.mode;
   if (c.llm.mode === 'fake') { set('#f-scn', c.llm.scenario.join(',')); set('#f-delay', c.llm.delay_ms); }
@@ -368,6 +448,14 @@ $('#b-test').onclick = async () => {
 };
 
 /* ---------- start ---------- */
+function formInput() {
+  const i = {job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value}, mc = $('#f-maxchars').value;
+  if (mc) i.max_chars = +mc;
+  return i;
+}
+function promptRefs() {  // "" = built-in default; "name" = latest version now; "name@2" = pinned
+  const r = {}; if ($('#f-pw').value) r.writer = $('#f-pw').value; if ($('#f-pr').value) r.reviewer = $('#f-pr').value; return r;
+}
 $('#b-start').onclick = async () => {
   $('#start-err').textContent = '';
   const rerr = rubricError();
@@ -377,8 +465,9 @@ $('#b-start').onclick = async () => {
   try {
     const {run_id} = await api('/api/runs', {
       workflow: 'cover_letter',
-      input: {job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value},
+      input: formInput(),
       overrides: buildOverrides(scn),
+      prompt_refs: promptRefs(),
     });
     select(run_id);
   } catch (e) { $('#start-err').textContent = e.message; }
@@ -399,7 +488,7 @@ function parseBatch(text) {  // blocks separated by '---'; "직무:" / "문항:"
   });
 }
 const scnValues = () => $('#f-scn').value.split(',').map(parseFloat).filter(x => !isNaN(x));
-function jobFromInput(input) { return {workflow: 'cover_letter', input, overrides: buildOverrides(scnValues())}; }
+function jobFromInput(input) { return {workflow: 'cover_letter', input, overrides: buildOverrides(scnValues()), prompt_refs: promptRefs()}; }
 async function enqueue(inputs) {
   $('#q-err').textContent = '';
   const re = rubricError(); if (re) { $('#q-err').textContent = re; return; }
@@ -415,7 +504,7 @@ $('#q-add').onclick = () => {
   if (bad >= 0) { $('#q-err').textContent = `${bad + 1}번째 작업에 "직무:" 줄이 없습니다`; return; }
   enqueue(items);
 };
-$('#q-add-form').onclick = () => enqueue([{job: $('#f-job').value, question: $('#f-q').value, draft: $('#f-draft').value}]);
+$('#q-add-form').onclick = () => enqueue([formInput()]);
 let qState = null;
 async function loadQueue() {
   const {control: c, jobs} = await api('/api/queue'); qState = {c, jobs};
@@ -597,6 +686,8 @@ function renderCfg() {
     <span>단가(1k tok)</span><span>in $${c.pricing.in_per_1k} / out $${c.pricing.out_per_1k}</span>
     <span>최대 토큰/호출</span><span>${c.llm.max_tokens ?? '-'}</span>
     <span>단계 승인 모드</span><span>${c.step_mode ? '켜짐 (라운드마다 멈춤)' : '꺼짐'}</span>
+    <span>프롬프트</span><span>${['writer', 'reviewer'].map(r => `${r}: ${c.prompt_refs?.[r] ? esc(c.prompt_refs[r]) : c.prompts?.[r] ? '직접 지정' : '기본(내장)'}`).join(' · ')}</span>
+    <span>분량 제한</span><span>${events[0].input.max_chars ? events[0].input.max_chars + '자' : '없음'}</span>
     ${c.llm.mode === 'fake' ? `<span>가짜 시나리오</span><span>${esc(c.llm.scenario.join(' → '))}</span>`
       : `<span>모델</span><span>${esc(c.llm.model)} (리뷰어: ${esc(c.llm.models.reviewer || c.llm.model)})</span>
          <span>모델별 단가(1k)</span><span>${esc(JSON.stringify(c.pricing_models || {}))}${missingPrice.length
@@ -606,6 +697,167 @@ function renderCfg() {
       <button class="ghost" id="b-load" title="이 run의 입력과 설정을 새 실행 폼에 채워 넣고, 바꿔서 실행해 비교">폼으로 불러오기</button></p>
     <table style="margin-top:8px"><tr><th>루브릭</th><th>가중치</th></tr>${c.rubric.map(r => `<tr><td title="${esc(r.description)}">${esc(r.name)}</td><td>${r.weight}</td></tr>`).join('')}</table>`;
 }
+
+/* ---------- library: datasets + versioned prompts ---------- */
+async function call(method, path, body) {
+  const r = await fetch(path, {method, headers: {'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || r.status));
+  return j;
+}
+const WF = 'cover_letter';
+let spec = null, datasets = [], dsId = '', items = [], editing = null, prompts = [], prRole = '';
+const ensureSpec = async () => spec ||= await api(`/api/workflows/${WF}/spec`);
+
+async function loadPromptOptions() {  // the prompt choices in the "새 실행" form
+  prompts = await api(`/api/library/prompts?workflow=${WF}`);
+  for (const [id, role] of [['#f-pw', 'writer'], ['#f-pr', 'reviewer']]) {
+    const sel = $(id), keep = sel.value;
+    sel.innerHTML = '<option value="">기본 (내장)</option>' + prompts.filter(p => p.role === role).map(p =>
+      `<optgroup label="${esc(p.name)}"><option value="${esc(p.name)}">${esc(p.name)} · 최신 (v${p.versions.at(-1).version})</option>`
+      + [...p.versions].reverse().map(v => `<option value="${esc(p.name)}@${v.version}">${esc(p.name)}@${v.version}${v.note ? ' — ' + esc(v.note) : ''}</option>`).join('')
+      + '</optgroup>').join('');
+    sel.value = keep; if (sel.value !== keep) sel.value = '';
+  }
+}
+const libOpen = () => $('#lib-modal').style.display !== 'none';
+function libTab(t) {
+  $('#lib-ds').style.display = t === 'ds' ? '' : 'none'; $('#lib-pr').style.display = t === 'pr' ? '' : 'none';
+  document.querySelectorAll('[data-lt]').forEach(b => b.className = b.dataset.lt === t ? 'on' : 'ghost');
+}
+async function openLib(tab) {
+  $('#lib-modal').style.display = ''; libTab(tab || 'ds');
+  try { await ensureSpec(); await Promise.all([loadDatasets(), loadPrompts()]); } catch (e) { $('#ds-err').textContent = e.message; }
+}
+const closeLib = () => { $('#lib-modal').style.display = 'none'; };
+$('#b-lib').onclick = () => openLib();
+$('#lib-close').onclick = closeLib;
+$('#lib-modal').addEventListener('mousedown', e => { if (e.target.id === 'lib-modal') closeLib(); });
+document.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => libTab(b.dataset.lt));
+addEventListener('keydown', e => { if (e.key === 'Escape' && libOpen()) { closeLib(); e.stopPropagation(); } }, true);
+
+/* datasets */
+async function loadDatasets(keep) {
+  datasets = await api('/api/library/datasets');
+  dsId = keep || (datasets.some(d => d.id === dsId) ? dsId : datasets[0]?.id || '');
+  $('#ds-sel').innerHTML = datasets.length ? datasets.map(d => `<option value="${esc(d.id)}">${esc(d.name)} (${d.items}건)</option>`).join('')
+    : '<option value="">데이터셋 없음 — 아래에서 만드세요</option>';
+  $('#ds-sel').value = dsId; $('#ds-del').disabled = !dsId; $('#ds-body').style.display = dsId ? '' : 'none';
+  if (dsId) await loadItems();
+}
+async function loadItems() { items = await api(`/api/library/datasets/${dsId}/items`); renderItems(); renderItemForm(); }
+function renderItems() {
+  $('#it-count').textContent = `(${items.length}건)`;
+  $('#it-list').innerHTML = items.length ? items.map(it => `
+    <div class="it"><input type="checkbox" class="it-chk" data-id="${esc(it.id)}">
+      <div class="tx"><b>${esc(it.label || it.data.job || '(제목 없음)')}</b>
+        <small>${esc(it.data.job || '')} · ${esc((it.data.question || '').slice(0, 60))} · 초안 ${(it.data.draft || '').length}자${it.data.max_chars ? ` · 제한 ${it.data.max_chars}자` : ''}</small></div>
+      <button class="ghost it-use" data-id="${esc(it.id)}" title="새 실행 폼에 채우기">폼에 불러오기</button>
+      <button class="ghost it-edit" data-id="${esc(it.id)}">수정</button>
+      <button class="ghost it-del" data-id="${esc(it.id)}">삭제</button></div>`).join('')
+    : '<div class="muted">항목이 없습니다. 오른쪽에서 추가하거나 가져오세요.</div>';
+}
+function renderItemForm() {
+  const cur = editing ? items.find(i => i.id === editing) : null;
+  $('#it-form').innerHTML = spec.input_fields.map(x => {
+    const v = cur?.data[x.name] ?? '', lab = `<label>${esc(x.label)}${x.required ? ' *' : ''}</label>`;
+    return lab + (x.type === 'textarea' ? `<textarea data-f="${esc(x.name)}">${esc(v)}</textarea>`
+      : `<input data-f="${esc(x.name)}" type="${x.type === 'number' ? 'number' : 'text'}" value="${esc(v)}">`);
+  }).join('');
+  $('#it-label').value = cur?.label || '';
+  $('#it-form-title').textContent = cur ? '항목 수정' : '항목 추가';
+  $('#it-save').textContent = cur ? '저장' : '추가'; $('#it-cancel').style.display = cur ? '' : 'none';
+  $('#imp-cols').textContent = spec.input_fields.map(x => x.name).join(', ');
+}
+const itemData = () => Object.fromEntries([...$('#it-form').querySelectorAll('[data-f]')].map(e => [e.dataset.f, e.value]));
+const dsErr = e => { $('#ds-err').textContent = e ? e.message : ''; };
+$('#ds-sel').onchange = async () => { dsId = $('#ds-sel').value; editing = null; $('#ds-body').style.display = dsId ? '' : 'none'; if (dsId) await loadItems(); };
+$('#ds-create').onclick = async () => {
+  try { const {id} = await call('POST', '/api/library/datasets', {name: $('#ds-new').value, workflow: WF}); $('#ds-new').value = ''; editing = null; dsErr(); await loadDatasets(id); }
+  catch (e) { dsErr(e); }
+};
+$('#ds-del').onclick = async () => {
+  const d = datasets.find(x => x.id === dsId);
+  if (!d || !confirm(`"${d.name}" 데이터셋과 항목 ${d.items}건을 삭제합니다. (이미 실행한 run 기록은 그대로 남습니다) 계속할까요?`)) return;
+  try { await call('DELETE', `/api/library/datasets/${dsId}`); dsId = ''; editing = null; dsErr(); await loadDatasets(); } catch (e) { dsErr(e); }
+};
+$('#it-save').onclick = async () => {
+  try {
+    const body = {data: itemData(), label: $('#it-label').value};
+    if (editing) await call('PUT', `/api/library/items/${editing}`, body); else await call('POST', `/api/library/datasets/${dsId}/items`, body);
+    editing = null; dsErr(); await loadDatasets(dsId);
+  } catch (e) { dsErr(e); }
+};
+$('#it-cancel').onclick = () => { editing = null; renderItemForm(); };
+$('#it-list').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const it = items.find(i => i.id === b.dataset.id); if (!it) return;
+  if (b.classList.contains('it-use')) {
+    const set = (id, v) => { $(id).value = v ?? ''; };
+    set('#f-job', it.data.job); set('#f-q', it.data.question); set('#f-draft', it.data.draft); set('#f-maxchars', it.data.max_chars);
+    closeLib(); $('#f-job').scrollIntoView({behavior: 'smooth', block: 'center'});
+  } else if (b.classList.contains('it-edit')) { editing = it.id; renderItemForm(); }
+  else if (b.classList.contains('it-del') && confirm('이 항목을 삭제할까요? (이미 실행한 run 기록은 그대로 남습니다)')) {
+    try { await call('DELETE', `/api/library/items/${it.id}`); if (editing === it.id) editing = null; dsErr(); await loadDatasets(dsId); } catch (err) { dsErr(err); }
+  }
+};
+async function readText(f) {  // Excel on a Korean Windows saves CSV as EUC-KR: fall back when the bytes are not valid UTF-8
+  const buf = await f.arrayBuffer();
+  try { return new TextDecoder('utf-8', {fatal: true}).decode(buf); } catch { return new TextDecoder('euc-kr').decode(buf); }
+}
+$('#imp-file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('#imp-text').value = await readText(f); $('#imp-fmt').value = /\.json$/i.test(f.name) ? 'json' : 'csv';
+};
+$('#imp-go').onclick = async () => {
+  try {
+    const r = await call('POST', `/api/library/datasets/${dsId}/import`, {format: $('#imp-fmt').value, text: $('#imp-text').value});
+    $('#imp-text').value = ''; $('#imp-file').value = ''; dsErr(); await loadDatasets(dsId); $('#ds-enq-msg').textContent = `${r.added}건 가져옴`;
+  } catch (e) { dsErr(e); }
+};
+$('#ds-enq').onclick = async () => {
+  const re = rubricError(); if (re) { dsErr({message: re}); return; }
+  const ids = [...document.querySelectorAll('.it-chk:checked')].map(c => c.dataset.id), n = ids.length || items.length;
+  if (!n) { dsErr({message: '등록할 항목이 없습니다'}); return; }
+  if ($('#f-mode').value === 'hchat' && !confirm(`실제 LLM 작업 ${n}건을 큐에 등록합니다. 큐를 시작하면 토큰이 사용되고 과금될 수 있습니다. 계속할까요?`)) return;
+  try {
+    const r = await call('POST', `/api/library/datasets/${dsId}/enqueue`,
+      {overrides: buildOverrides(scnValues()), prompt_refs: promptRefs(), item_ids: ids.length ? ids : null});
+    $('#ds-enq-msg').textContent = `${r.job_ids.length}건 큐에 등록됨 (큐 카드에서 시작)`; dsErr(); loadQueue();
+  } catch (e) { dsErr(e); }
+};
+
+/* prompts */
+async function loadPrompts() { await loadPromptOptions(); renderPromptPane(); }
+const setBody = (text, from) => { $('#pr-body').value = text; $('#pr-from').textContent = from; };
+function renderPromptPane() {
+  const roles = spec.prompt_roles; prRole = prRole in roles ? prRole : Object.keys(roles)[0];
+  $('#pr-role').innerHTML = Object.entries(roles).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`).join(''); $('#pr-role').value = prRole;
+  const r = roles[prRole];
+  $('#pr-vars').innerHTML = r.vars.map(v => `<span class="chip">{{${v}}}${r.required.includes(v) ? ' *' : ''}</span>`).join('')
+    + '<div class="muted" style="font-size:11px">* 필수. 본문에 그대로 써 넣으면 실행할 때 값으로 바뀝니다.</div>';
+  $('#pr-fixed').textContent = r.fixed;
+  const mine = prompts.filter(p => p.role === prRole);
+  $('#pr-list').innerHTML = mine.length ? mine.map(p => `<div style="margin-bottom:6px"><b>${esc(p.name)}</b> `
+      + [...p.versions].reverse().map(v => `<button class="ghost ver" data-n="${esc(p.name)}" data-v="${v.version}" title="${esc(v.note || '')}">v${v.version}</button>`).join(' ') + '</div>').join('')
+    : '<div class="muted" style="font-size:12px">저장된 프롬프트 없음 — 지금은 내장 기본 프롬프트가 쓰입니다.</div>';
+  if (!$('#pr-body').value) setBody(r.default, '(내장 기본값)');
+}
+$('#pr-role').onchange = () => { prRole = $('#pr-role').value; $('#pr-body').value = ''; $('#pr-name').value = ''; renderPromptPane(); };
+$('#pr-list').onclick = async e => {
+  const b = e.target.closest('.ver'); if (!b) return;
+  try { const p = await api(`/api/library/prompts/${encodeURIComponent(b.dataset.n)}?version=${b.dataset.v}`); $('#pr-name').value = p.name; setBody(p.body, `(${p.name}@${p.version}에서 불러옴)`); }
+  catch (err) { $('#pr-err').textContent = err.message; }
+};
+$('#pr-default').onclick = () => setBody(spec.prompt_roles[prRole].default, '(내장 기본값)');
+$('#pr-save').onclick = async () => {
+  $('#pr-err').textContent = '';
+  try {
+    const r = await call('POST', '/api/library/prompts', {workflow: WF, role: prRole, name: $('#pr-name').value, body: $('#pr-body').value, note: $('#pr-note').value});
+    $('#pr-note').value = ''; $('#pr-from').textContent = `(${r.name}@${r.version} 저장됨)`; await loadPrompts();
+  } catch (e) { $('#pr-err').textContent = e.message; }
+};
+loadPromptOptions().catch(() => {});
 
 // when embedded as the Office popup, keyboard focus lives in this frame: forward Esc so the popup can close
 addEventListener('keydown', e => {
