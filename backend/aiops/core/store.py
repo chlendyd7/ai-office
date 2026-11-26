@@ -1,24 +1,23 @@
-"""Append-only run record: one JSONL file per run. Single source of truth for Ops and Office."""
+"""Append-only run record, stored in SQLite (`events`). Single source of truth for Ops and Office."""
 from __future__ import annotations
 
 import json
 import logging
 import re
-import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+from .db import Database, open_db
 
 log = logging.getLogger("aiops.store")
 _ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class RunStore:
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+    def __init__(self, root: "str | Path | Database"):
+        self.db = open_db(root)
         self._listeners: list[Callable[[str, dict], None]] = []
 
     def subscribe(self, fn: Callable[[str, dict], None]) -> None:
@@ -28,27 +27,20 @@ class RunStore:
     def new_run_id(self) -> str:
         return f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
 
-    def _path(self, run_id: str) -> Path:
+    @staticmethod
+    def _check(run_id: str) -> str:
         if not _ID.fullmatch(run_id):
             raise ValueError(f"invalid run id: {run_id!r}")
-        return self.root / f"{run_id}.jsonl"
+        return run_id
 
     def append(self, run_id: str, type_: str, /, **data) -> dict:
-        with self._lock:
-            self.root.mkdir(parents=True, exist_ok=True)  # survive the runs folder being cleaned while the server runs
-            p = self._path(run_id)
-            seq = 0
-            if p.exists():
-                with p.open(encoding="utf-8") as f:
-                    seq = sum(1 for _ in f)
-            ev = {
-                "seq": seq,
-                "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-                "type": type_,
-                **data,
-            }
-            with p.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+        self._check(run_id)
+        with self.db.lock:
+            seq = self.db.conn.execute("SELECT COALESCE(MAX(seq) + 1, 0) FROM events WHERE run_id = ?", (run_id,)).fetchone()[0]
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            self.db.conn.execute("INSERT INTO events (run_id, seq, ts, type, data) VALUES (?, ?, ?, ?, ?)",
+                                 (run_id, seq, ts, type_, json.dumps(data, ensure_ascii=False)))
+        ev = {"seq": seq, "ts": ts, "type": type_, **data}
         for fn in self._listeners:
             try:
                 fn(run_id, ev)
@@ -57,12 +49,13 @@ class RunStore:
         return ev
 
     def read(self, run_id: str) -> list[dict]:
-        p = self._path(run_id)
-        if not p.exists():
+        self._check(run_id)
+        with self.db.lock:
+            rows = self.db.conn.execute("SELECT seq, ts, type, data FROM events WHERE run_id = ? ORDER BY seq", (run_id,)).fetchall()
+        if not rows:
             raise KeyError(run_id)
-        with self._lock:  # never observe a half-written line
-            with p.open(encoding="utf-8") as f:
-                return [json.loads(line) for line in f if line.strip()]
+        return [{"seq": s, "ts": ts, "type": t, **json.loads(d)} for s, ts, t, d in rows]
 
     def list_runs(self) -> list[str]:
-        return sorted(p.stem for p in self.root.glob("*.jsonl"))
+        with self.db.lock:
+            return [r[0] for r in self.db.conn.execute("SELECT DISTINCT run_id FROM events ORDER BY run_id")]

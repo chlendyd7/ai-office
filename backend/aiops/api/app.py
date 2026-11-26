@@ -69,12 +69,12 @@ class ControlReq(BaseModel):
     concurrency: int | None = None
 
 
-def create_app(runs_dir: str | Path = BACKEND / "runs", engine: Engine | None = None, queue_path: str | Path | None = None,
+def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = None,
                start_worker: bool = False, worker_interval: float = 0.5) -> FastAPI:
-    eng = engine or Engine(RunStore(runs_dir), REGISTRY, prices=load_prices(PRICING_FILE))
+    eng = engine or Engine(RunStore(data_dir), REGISTRY, prices=load_prices(PRICING_FILE))
     store = eng.store
     eng.recover_interrupted()  # runs left "running" by a previous process would block the Office and the queue forever
-    queue = JobQueue(queue_path or f"{str(runs_dir).rstrip('/' + chr(92))}_queue.jsonl")
+    queue = JobQueue(store.db)  # run record and queue share one database file
     worker = Worker(eng, queue, interval=worker_interval)  # always starts paused, even if jobs are queued
     if start_worker:
         worker.start_thread()

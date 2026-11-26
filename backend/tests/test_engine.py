@@ -172,14 +172,3 @@ def test_unsupported_llm_mode_is_rejected_before_anything_is_recorded(eng):
 def test_run_id_is_validated(tmp_path):
     with pytest.raises(ValueError):
         RunStore(tmp_path).read("../etc/passwd")
-
-
-def test_store_recreates_a_deleted_runs_folder(tmp_path):
-    import shutil
-
-    store = RunStore(tmp_path / "runs")
-    shutil.rmtree(tmp_path / "runs")  # e.g. someone cleans the folder while the server is up
-    assert store.list_runs() == []
-    eng = Engine(store, REGISTRY)
-    rid = eng.start("cover_letter", INPUT)
-    assert summarize(store.read(rid))["status"] == "awaiting_approval"

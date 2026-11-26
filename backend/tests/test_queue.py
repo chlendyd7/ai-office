@@ -19,7 +19,7 @@ def job(i=1, **overrides):
 @pytest.fixture
 def rig(tmp_path):
     eng = Engine(RunStore(tmp_path / "runs"), REGISTRY)
-    q = JobQueue(tmp_path / "q.jsonl")
+    q = JobQueue(tmp_path / "q.db")
     return eng, q, Worker(eng, q, background=False)  # synchronous: tick() runs the loop to the approval gate
 
 
@@ -70,7 +70,7 @@ def test_consecutive_failures_pause_the_worker(tmp_path):
             return "not json"
 
     eng = Engine(RunStore(tmp_path / "runs"), REGISTRY, llm_factory=lambda c: Bad(c))
-    q = JobQueue(tmp_path / "q.jsonl")
+    q = JobQueue(tmp_path / "q.db")
     w = Worker(eng, q, background=False)
     q.enqueue([job(i) for i in range(4)])
     w.start(max_failures=2, max_pending=10)
@@ -84,7 +84,7 @@ def test_restart_comes_back_paused_with_the_queue_intact(rig, tmp_path):
     q.enqueue([job(1), job(2)])
     w.start()
     w.tick()
-    fresh = Worker(eng, JobQueue(tmp_path / "q.jsonl"), background=False)  # "server restarted"
+    fresh = Worker(eng, JobQueue(tmp_path / "q.db"), background=False)  # "server restarted"
     assert not fresh.enabled and fresh.tick() == "paused"
     assert [j["status"] for j in fresh.queue.jobs()] == ["started", "queued"]
 

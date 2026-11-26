@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .db import Database, open_db
 from .engine import Engine
 from .summary import derive_status, summarize
 
@@ -29,26 +30,20 @@ TERMINAL = {"approved", "rejected", "failed"}
 class JobQueue:
     """Append-only log of queue events, folded into job states. Survives restarts."""
 
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self._lock = threading.Lock()
+    def __init__(self, db: "str | Path | Database"):
+        self.db = open_db(db)
 
     def _append(self, **ev) -> None:
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), **ev}, ensure_ascii=False) + "\n")
+        with self.db.lock:
+            self.db.conn.execute("INSERT INTO queue_events (ts, data) VALUES (?, ?)",
+                                 (datetime.now(timezone.utc).isoformat(timespec="seconds"), json.dumps(ev, ensure_ascii=False)))
 
     def jobs(self) -> list[dict]:
-        if not self.path.exists():
-            return []
         jobs: dict[str, dict] = {}
-        with self._lock:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            if not line.strip():
-                continue
-            e = json.loads(line)
+        with self.db.lock:
+            rows = self.db.conn.execute("SELECT ts, data FROM queue_events ORDER BY id").fetchall()
+        for ts, data in rows:
+            e = {"ts": ts, **json.loads(data)}
             j = jobs.get(e.get("job_id"))
             t = e["type"]
             if t == "enqueued":

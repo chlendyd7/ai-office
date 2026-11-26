@@ -9,7 +9,7 @@
 | **AI Office** `/office` | 결정권자 | 에이전트가 일하는 모습(픽셀 오피스) + 최종 결과물·점수·종료 사유·토큰/비용 + 승인/수정 요청/반려. **AI Ops 팝업**으로 상세 확인 |
 
 핵심 원칙
-- **run 기록(JSONL)이 단일 원본.** Ops, Office 모두 같은 기록에서 파생됨. 설정 스냅샷, 프롬프트·응답 전문, 호출별 토큰/비용이 남아 검증·재현 가능
+- **run 기록(SQLite `events` 테이블, 추가 전용)이 단일 원본.** Ops, Office 모두 같은 기록에서 파생됨. 설정 스냅샷, 프롬프트·응답 전문, 호출별 토큰/비용이 남아 검증·재현 가능. `UPDATE`/`DELETE`는 DB 트리거가 거부함
 - **AI는 확정하지 못함.** 루프가 끝나면 `awaiting_approval`에서 멈추고 사람의 결정(승인/수정 요청/반려)만 run을 닫음
 - **계측은 우회 불가.** 워크플로는 `MeteredLLM`만 받으므로 모든 LLM 호출이 자동으로 기록·과금 계산되고 예산 상한이 강제됨
 - **Office는 요약만, 전문은 팝업에서.** `/api/office/*`는 결과·점수·결정·사용량 합계(토큰/비용/예산)·"누가 일하는 중"만 반환 (프롬프트·응답 전문은 없음). 작업 중에는 중간 점수/초안은 숨기고 지출만 표시. 전문·설정·비교·새 실행은 Office 상단 **AI Ops** 팝업(같은 Ops 콘솔)에서
@@ -80,7 +80,7 @@ set H_CHAT_API_KEY=local-test-key & set H_CHAT_BASE_URL=http://127.0.0.1:8999/cl
 
 ```
 backend/aiops/
-  core/       store(JSONL 기록), metered(LLM 계측·예산 가드), engine(수명주기+승인 게이트), summary, config, jsonx, env
+  core/       db+store(SQLite 단일 파일, 추가 전용 실행 기록·큐), dbio(텍스트 내보내기/가져오기), metered(LLM 계측·예산 가드), engine(수명주기+승인 게이트), summary, config, jsonx, env
   llm/        LLMClient 인터페이스, FakeLLM(결정적 점수 시나리오), HChatClient(실제 호출)
   workflows/  cover_letter (LangGraph write → review → decide 루프). 워크플로 추가 = 파일 추가
   office/     Office 전용 뷰(결과/점수/결정, 애니메이션 이벤트)
@@ -100,4 +100,4 @@ Office 캔버스는 `design/mockup.html`의 코드를 그대로 재사용하고,
 
 ## 데이터 주의
 
-실행 기록(`backend/runs/`)에는 입력한 자기소개서 원문이 들어가므로 **git 에서 제외**되어 있음. 커밋하지 말 것.
+실행 기록·큐가 들어 있는 `backend/data/aiops.db`에는 입력한 자기소개서 원문이 들어가므로 **git 에서 제외**되어 있음. 커밋하지 말 것 (이 저장소는 공개). 옮기거나 백업할 때는 `python -m aiops.dbio export <폴더>` / `import <폴더>`로 텍스트(JSONL)로 내보내고 가져옴 — 이전 파일 방식의 `runs/` 폴더도 그대로 import 됨. 초기화는 서버를 끄고 `backend/data/aiops.db*` 삭제
