@@ -67,9 +67,14 @@ def clean_fields(fields: list[dict], raw: dict) -> dict:
         v = raw.get(f["name"])
         v = v.strip() if isinstance(v, str) else v
         if v in (None, ""):
-            if f.get("required"):
+            if f.get("default") is not None:
+                v = f["default"]
+            elif f.get("required"):
                 raise ValueError(f"'{f['name']}' is required")
-            continue
+            else:
+                continue
+        if f.get("options") and v not in f["options"]:
+            raise ValueError(f"'{f['name']}' must be one of {', '.join(map(str, f['options']))} (got {v!r})")
         if f.get("type") == "number":
             try:
                 v = int(float(v))

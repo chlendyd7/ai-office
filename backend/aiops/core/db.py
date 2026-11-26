@@ -94,6 +94,53 @@ ADDED_COLUMNS = {
 }
 
 
+# Numbered migrations after the v1 baseline (SCHEMA + ADDED_COLUMNS, which every database already has). Each is a list of
+# statements run in ONE transaction together with the version bump: it either applies completely or not at all.
+# v2: projects, deliverables and what they use (see docs/design-task-schema.md). No foreign keys on purpose: deletes are
+# done by one function in one transaction and `integrity_problems` audits what is left.
+MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        """CREATE TABLE projects (
+            id         TEXT PRIMARY KEY,
+            office     TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            brief      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(brief)),
+            notes      TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX projects_by_office ON projects (office, updated_at)",
+        """CREATE TABLE deliverables (
+            id            TEXT PRIMARY KEY,
+            project_id    TEXT NOT NULL,
+            position      INTEGER NOT NULL,
+            kind          TEXT NOT NULL,
+            title         TEXT NOT NULL,
+            spec          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(spec)),
+            final_content TEXT,
+            final_meta    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(final_meta)),
+            final_run_id  TEXT NOT NULL DEFAULT '',
+            final_at      TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        )""",
+        "CREATE INDEX deliverables_by_project ON deliverables (project_id, position)",
+        """CREATE TABLE project_resources (
+            project_id  TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            role        TEXT NOT NULL DEFAULT 'evidence',
+            added_at    TEXT NOT NULL,
+            PRIMARY KEY (project_id, resource_id)
+        ) WITHOUT ROWID""",
+        "CREATE INDEX project_resources_by_resource ON project_resources (resource_id)",
+        "ALTER TABLE resources ADD COLUMN meta TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta))",
+        "ALTER TABLE resources ADD COLUMN owner_project_id TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX events_project_id ON events (json_extract(data, '$.project_id')) WHERE type = 'run_started'",
+        "CREATE INDEX events_project_run ON events (json_extract(data, '$.project_run')) WHERE type = 'run_started'",
+    ],
+}
+
+
 class Database:
     """A single shared connection guarded by a lock (the app is one process: API threads + one worker thread)."""
 
@@ -103,12 +150,37 @@ class Database:
         self.lock = threading.RLock()
         self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)  # autocommit
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.executescript(SCHEMA)
-        for table, cols in ADDED_COLUMNS.items():
-            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
-            for name, ddl in cols.items():
-                if name not in have:
-                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        self._migrate()
+
+    def version(self) -> int:
+        return self.conn.execute("PRAGMA user_version").fetchone()[0]
+
+    def _migrate(self) -> None:
+        version = self.version()
+        latest = max(MIGRATIONS, default=1)
+        if version > latest:  # opened by older code: do not guess what the newer tables mean
+            raise RuntimeError(f"database schema v{version} is newer than this code (v{latest}): update the application")
+        if version < 1:  # new database, or one made before versions existed: both are brought to the v1 baseline (idempotent)
+            self.conn.executescript(SCHEMA)
+            for table, cols in ADDED_COLUMNS.items():
+                have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                for name, ddl in cols.items():
+                    if name not in have:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+            self.conn.execute("PRAGMA user_version = 1")
+            version = 1
+        for v in sorted(MIGRATIONS):
+            if v <= version:
+                continue
+            self.conn.execute("BEGIN")
+            try:
+                for statement in MIGRATIONS[v]:
+                    self.conn.execute(statement)
+                self.conn.execute(f"PRAGMA user_version = {v}")
+                self.conn.execute("COMMIT")
+            except BaseException:
+                self.conn.execute("ROLLBACK")
+                raise
 
     def close(self) -> None:
         with self.lock:

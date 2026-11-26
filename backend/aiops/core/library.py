@@ -23,8 +23,8 @@ def _split_ref(ref: str) -> tuple[str, int | None]:
 
 
 RESOURCE_FIELDS = ("id", "name", "source_name", "source_type", "pages", "text", "created_at", "updated_at",
-                   "review_status", "converted_by", "convert_run_id")
-RESOURCE_DEFAULTS = {"review_status": "verified", "converted_by": "text", "convert_run_id": ""}  # for exports from before these existed
+                   "review_status", "converted_by", "convert_run_id", "meta", "owner_project_id")
+RESOURCE_DEFAULTS = {"review_status": "verified", "converted_by": "text", "convert_run_id": "", "meta": {}, "owner_project_id": ""}  # for older exports
 CONVERTED_BY = ("text", "llm", "mixed")
 REVIEW_STATUS = ("verified", "unverified")
 
@@ -136,26 +136,36 @@ class Library:
 
     # ---- resources: the user's own material (resume, experience notes), stored as text so it can be corrected ----
     def add_resource(self, name: str, text: str, source_name: str = "", source_type: str = "paste", pages: int | None = None,
-                     converted_by: str = "text", convert_run_id: str = "") -> str:
+                     converted_by: str = "text", convert_run_id: str = "", meta: dict | None = None, owner_project_id: str = "") -> str:
         """Text a model produced (converted_by 'llm' or 'mixed') starts "unverified": it cannot be used as evidence until a
-        human has checked it against the original."""
+        human has checked it against the original. `owner_project_id`: '' = my library; otherwise the resource belongs to that
+        project only (a job description, a company research) and is not listed in the library."""
         if converted_by not in CONVERTED_BY:
             raise ValueError(f"converted_by must be one of {CONVERTED_BY}")
         name, text = _check_resource(name, text)
         rid, now = uuid.uuid4().hex[:10], _now()
         row = (rid, name, source_name, source_type, pages, text, now, now, "verified" if converted_by == "text" else "unverified",
-               converted_by, convert_run_id)
+               converted_by, convert_run_id, json.dumps(meta or {}, ensure_ascii=False), owner_project_id)
         with self.db.lock:
             self.db.conn.execute(f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES ({', '.join('?' * len(RESOURCE_FIELDS))})", row)
         return rid
 
-    def list_resources(self) -> list[dict]:
-        """Without the text (it can be long): id, name, type, chars, review state."""
+    def list_resources(self, owner_project_id: str = "") -> list[dict]:
+        """Without the text (it can be long): id, name, type, chars, review state. By default only my library ('');
+        pass a project id for the resources that belong to that project alone."""
         with self.db.lock:
             rows = self.db.conn.execute("SELECT id, name, source_name, source_type, pages, length(text), created_at, updated_at, "
-                                        "review_status, converted_by, convert_run_id FROM resources ORDER BY created_at, rowid").fetchall()
+                                        "review_status, converted_by, convert_run_id, owner_project_id FROM resources "
+                                        "WHERE owner_project_id = ? ORDER BY created_at, rowid", (owner_project_id,)).fetchall()
         return [dict(zip(("id", "name", "source_name", "source_type", "pages", "chars", "created_at", "updated_at",
-                          "review_status", "converted_by", "convert_run_id"), r)) for r in rows]
+                          "review_status", "converted_by", "convert_run_id", "owner_project_id"), r)) for r in rows]
+
+    def promote_resource(self, resource_id: str) -> dict:
+        """A project's own resource (say, a company research) goes into my library so later projects can use it."""
+        self.get_resource(resource_id)
+        with self.db.lock:
+            self.db.conn.execute("UPDATE resources SET owner_project_id = '', updated_at = ? WHERE id = ?", (_now(), resource_id))
+        return self.get_resource(resource_id)
 
     def require_verified(self, resource_ids: list[str]) -> list[dict]:
         """The resources a task may use as evidence: all must exist and be verified. Returns them (with text)."""
@@ -173,7 +183,9 @@ class Library:
             r = self.db.conn.execute(f"SELECT {', '.join(RESOURCE_FIELDS)} FROM resources WHERE id = ?", (resource_id,)).fetchone()
         if not r:
             raise KeyError(resource_id)
-        return dict(zip(RESOURCE_FIELDS, r))
+        out = dict(zip(RESOURCE_FIELDS, r))
+        out["meta"] = json.loads(out["meta"])
+        return out
 
     def update_resource(self, resource_id: str, name: str | None = None, text: str | None = None, verified: bool | None = None) -> dict:
         """Editing the text never changes the review state: only an explicit `verified` does."""
@@ -186,8 +198,13 @@ class Library:
         return self.get_resource(resource_id)
 
     def delete_resource(self, resource_id: str) -> None:
+        """Refused while a project selects it (the message names the projects): remove it from them first."""
         self.get_resource(resource_id)
         with self.db.lock:
+            using = [r[0] for r in self.db.conn.execute(
+                "SELECT p.title FROM project_resources pr JOIN projects p ON p.id = pr.project_id WHERE pr.resource_id = ? ORDER BY p.title", (resource_id,))]
+            if using:
+                raise ValueError("프로젝트가 이 리소스를 쓰고 있어 삭제할 수 없습니다 (먼저 프로젝트에서 빼세요): " + ", ".join(using))
             self.db.conn.execute("DELETE FROM resources WHERE id = ?", (resource_id,))
 
     # ---- prompts ----

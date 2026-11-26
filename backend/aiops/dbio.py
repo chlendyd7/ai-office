@@ -4,6 +4,7 @@
                                          # (refuses a folder inside a git repository unless --allow-git: personal data)
                                          # data/aiops.db  ->  <dir>/events/<run_id>.jsonl, queue.jsonl,
                                          #                    datasets.jsonl, items.jsonl, prompts.jsonl, resources.jsonl
+    python -m aiops.dbio check           # audit for rows that point at something that is gone (there are no foreign keys)
     python -m aiops.dbio import <dir>    # <dir> -> data/aiops.db   (idempotent: rows that already exist are skipped;
                                          #  an edited item replaces the older copy; a conflicting prompt version fails)
 
@@ -21,11 +22,32 @@ from .core.db import Database, open_db
 from .core.library import RESOURCE_DEFAULTS, RESOURCE_FIELDS
 
 
-NON_RUN_FILES = {"queue.jsonl", "datasets.jsonl", "items.jsonl", "prompts.jsonl", "resources.jsonl"}
+LIBRARY_TABLES = ("datasets", "items", "prompts", "resources", "projects", "deliverables", "project_resources")
+NON_RUN_FILES = {"queue.jsonl", *(f"{t}.jsonl" for t in LIBRARY_TABLES)}
+PROJECT_FIELDS = ("id", "office", "title", "brief", "notes", "created_at", "updated_at")
+DELIVERABLE_FIELDS = ("id", "project_id", "position", "kind", "title", "spec", "final_content", "final_meta", "final_run_id", "final_at",
+                      "created_at", "updated_at")
+JSON_COLUMNS = {"resources": ("meta",), "projects": ("brief",), "deliverables": ("spec", "final_meta")}  # stored as JSON text, exported as objects
+
+
+def _zero() -> dict:
+    return {"runs": 0, "events": 0, "queue_events": 0, **{t: 0 for t in LIBRARY_TABLES}}
 
 
 def _dump(e: dict) -> str:
     return json.dumps(e, ensure_ascii=False)
+
+
+def _out(table: str, fields: tuple, row: tuple) -> dict:
+    d = dict(zip(fields, row))
+    for c in JSON_COLUMNS.get(table, ()):
+        d[c] = json.loads(d[c])
+    return d
+
+
+def _in(table: str, fields: tuple, d: dict, defaults: dict | None = None) -> tuple:
+    d = {**(defaults or {}), **d}
+    return tuple(json.dumps(d[f], ensure_ascii=False) if f in JSON_COLUMNS.get(table, ()) else d[f] for f in fields)
 
 
 def git_root(path: Path) -> Path | None:
@@ -43,7 +65,7 @@ def export_dir(db: "str | Path | Database", out: str | Path, allow_git: bool = F
         raise ValueError(f"{out} is inside the git repository {root}. The export contains personal data and a repository may be public: "
                          "export to a folder outside it, or pass --allow-git if that repository is private.")
     (out / "events").mkdir(parents=True, exist_ok=True)
-    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0, "resources": 0}
+    counts = _zero()
     with db.lock:
         by_run: dict[str, list[str]] = {}
         for run_id, seq, ts, type_, data in db.conn.execute("SELECT run_id, seq, ts, type, data FROM events ORDER BY run_id, seq"):
@@ -62,7 +84,12 @@ def export_dir(db: "str | Path | Database", out: str | Path, allow_git: bool = F
                       for i, d, lb, js, c, u in db.conn.execute("SELECT id, dataset_id, label, data, created_at, updated_at FROM items ORDER BY id")],
             "prompts": [dict(zip(("name", "version", "workflow", "role", "body", "note", "created_at"), r))
                         for r in db.conn.execute("SELECT name, version, workflow, role, body, note, created_at FROM prompts ORDER BY name, version")],
-            "resources": [dict(zip(RESOURCE_FIELDS, r)) for r in db.conn.execute(f"SELECT {', '.join(RESOURCE_FIELDS)} FROM resources ORDER BY id")],
+            "resources": [_out("resources", RESOURCE_FIELDS, r) for r in db.conn.execute(f"SELECT {', '.join(RESOURCE_FIELDS)} FROM resources ORDER BY id")],
+            "projects": [_out("projects", PROJECT_FIELDS, r) for r in db.conn.execute(f"SELECT {', '.join(PROJECT_FIELDS)} FROM projects ORDER BY id")],
+            "deliverables": [_out("deliverables", DELIVERABLE_FIELDS, r)
+                             for r in db.conn.execute(f"SELECT {', '.join(DELIVERABLE_FIELDS)} FROM deliverables ORDER BY id")],
+            "project_resources": [dict(zip(("project_id", "resource_id", "role", "added_at"), r)) for r in db.conn.execute(
+                "SELECT project_id, resource_id, role, added_at FROM project_resources ORDER BY project_id, resource_id")],
         }
     for table, rows in lib.items():
         (out / f"{table}.jsonl").write_text("".join(_dump(r) + "\n" for r in rows), encoding="utf-8", newline="\n")
@@ -77,7 +104,7 @@ def _read_lines(path: Path) -> list[dict]:
 def _import_library(db: Database, src: Path) -> dict:
     """Datasets and prompts are insert-only; an item is updated when the incoming copy is newer. A prompt version that
     exists with different text is a real conflict (two machines saved different texts as the same version): fail loudly."""
-    counts = {"datasets": 0, "items": 0, "prompts": 0, "resources": 0}
+    counts = {t: 0 for t in LIBRARY_TABLES}
     for d in _read_lines(src / "datasets.jsonl"):
         counts["datasets"] += db.conn.execute("INSERT OR IGNORE INTO datasets (id, name, workflow, created_at) VALUES (?, ?, ?, ?)",
                                               (d["id"], d["name"], d["workflow"], d["created_at"])).rowcount
@@ -101,15 +128,33 @@ def _import_library(db: Database, src: Path) -> dict:
         counts["resources"] += db.conn.execute(
             f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES ({', '.join('?' * len(RESOURCE_FIELDS))}) "
             "ON CONFLICT(id) DO UPDATE SET name = excluded.name, text = excluded.text, review_status = excluded.review_status, "
+            "meta = excluded.meta, owner_project_id = excluded.owner_project_id, "
             "updated_at = excluded.updated_at WHERE excluded.updated_at > resources.updated_at",
-            tuple(r.get(f, RESOURCE_DEFAULTS.get(f)) for f in RESOURCE_FIELDS)).rowcount
+            _in("resources", RESOURCE_FIELDS, r, RESOURCE_DEFAULTS)).rowcount
+    for p in _read_lines(src / "projects.jsonl"):  # definitions: the more recently edited copy wins
+        counts["projects"] += db.conn.execute(
+            f"INSERT INTO projects ({', '.join(PROJECT_FIELDS)}) VALUES ({', '.join('?' * len(PROJECT_FIELDS))}) "
+            "ON CONFLICT(id) DO UPDATE SET title = excluded.title, brief = excluded.brief, notes = excluded.notes, "
+            "updated_at = excluded.updated_at WHERE excluded.updated_at > projects.updated_at",
+            _in("projects", PROJECT_FIELDS, p)).rowcount
+    for d in _read_lines(src / "deliverables.jsonl"):
+        counts["deliverables"] += db.conn.execute(
+            f"INSERT INTO deliverables ({', '.join(DELIVERABLE_FIELDS)}) VALUES ({', '.join('?' * len(DELIVERABLE_FIELDS))}) "
+            "ON CONFLICT(id) DO UPDATE SET position = excluded.position, kind = excluded.kind, title = excluded.title, spec = excluded.spec, "
+            "final_content = excluded.final_content, final_meta = excluded.final_meta, final_run_id = excluded.final_run_id, "
+            "final_at = excluded.final_at, updated_at = excluded.updated_at WHERE excluded.updated_at > deliverables.updated_at",
+            _in("deliverables", DELIVERABLE_FIELDS, d)).rowcount
+    for pr in _read_lines(src / "project_resources.jsonl"):  # deleting a link on one machine is not carried to the other
+        counts["project_resources"] += db.conn.execute(
+            "INSERT INTO project_resources (project_id, resource_id, role, added_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(project_id, resource_id) DO NOTHING", (pr["project_id"], pr["resource_id"], pr["role"], pr["added_at"])).rowcount
     return counts
 
 
 def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
     db, src = open_db(db), Path(src)
     run_dir = src / "events" if (src / "events").is_dir() else src  # a legacy runs/ folder is a flat set of <run_id>.jsonl
-    counts = {"runs": 0, "events": 0, "queue_events": 0, "datasets": 0, "items": 0, "prompts": 0, "resources": 0}
+    counts = _zero()
     with db.lock:
         db.conn.execute("BEGIN")
         try:
@@ -145,6 +190,12 @@ def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
 def main(argv: list[str]) -> int:
     allow_git = "--allow-git" in argv
     argv = [a for a in argv if a != "--allow-git"]
+    if argv == ["check"]:
+        from .core.integrity import integrity_problems
+
+        problems = integrity_problems(Database(Path(__file__).resolve().parents[1] / "data" / "aiops.db"))
+        print("\n".join(problems) if problems else "no problems found")
+        return 1 if problems else 0
     if len(argv) != 2 or argv[0] not in ("export", "import"):
         print(__doc__)
         return 2

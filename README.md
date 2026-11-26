@@ -115,6 +115,8 @@ Office 캔버스는 `design/mockup.html`의 코드를 그대로 재사용하고,
 
 ## 데이터 주의
 
-실행 기록·큐가 들어 있는 `backend/data/aiops.db`에는 입력한 자기소개서 원문이 들어가므로 **git 에서 제외**되어 있음. 커밋하지 말 것 (이 저장소는 공개). 옮기거나 백업할 때는 `python -m aiops.dbio export <폴더>` / `import <폴더>`로 텍스트(JSONL)로 내보내고 가져옴 — 이전 파일 방식의 `runs/` 폴더도 그대로 import 됨. 초기화는 서버를 끄고 `backend/data/aiops.db*` 삭제
+실행 기록·큐가 들어 있는 `backend/data/aiops.db`에는 입력한 자기소개서 원문이 들어가므로 **git 에서 제외**되어 있음. 커밋하지 말 것 (이 저장소는 공개). 옮기거나 백업할 때는 `python -m aiops.dbio export <폴더>` / `import <폴더>`로 텍스트(JSONL)로 내보내고 가져옴 — 이전 파일 방식의 `runs/` 폴더도 그대로 import 됨. 초기화는 서버를 끄고 `backend/data/aiops.db*` 삭제.
+
+**데이터 구조** (`docs/design-task-schema.md`): 뼈대는 도메인을 모르게 두었음. 의뢰 한 건 = **project**, 맡긴 결과물 하나 = **deliverable**(자소서 오피스에선 문항 하나)이고, 회사·문항·글자 수 같은 도메인 내용은 **오피스 선언**(`backend/aiops/offices/`, 지금은 `career`)과 JSON 열에만 있음 — 코드·기획 오피스는 선언을 추가해서 붙임. 직무 설명·회사 조사는 프로젝트 전용 리소스로 두며 변환·검수 흐름을 그대로 씀. 스키마는 `PRAGMA user_version`으로 번호 붙은 마이그레이션(실패하면 되돌림, 코드보다 새 DB는 열지 않음)을 쓰고, 외래키는 쓰지 않는 대신 삭제를 한 트랜잭션으로 처리하며 `python -m aiops.dbio check`가 고아 행을 점검함.
 
 **개인 데이터는 이 저장소에 올리지 않음.** 이력서·자소서·리소스가 들어가는 시점부터 `backend/data_export/`도 `.gitignore` 대상이고, `dbio export`는 **git 저장소 안의 폴더로는 내보내기를 거부함**(공개 저장소에 한 번 올라간 내용은 지워도 히스토리에 남기 때문). 다른 PC로 옮길 때는 저장소 밖 폴더(예: OneDrive)로 내보내서 옮기고, 비공개로 확인된 별도 저장소를 쓸 때만 `--allow-git`를 붙임. 초기 시험 데이터 샘플은 이미 커밋 히스토리에 있음(실제 개인정보 없음).
