@@ -26,6 +26,12 @@ class HChatError(RuntimeError):
     pass
 
 
+def _block(a: dict) -> dict:
+    """A PDF goes as a `document` block, a picture as an `image` block (both verified against the gateway)."""
+    return {"type": "document" if a["kind"] == "pdf" else "image",
+            "source": {"type": "base64", "media_type": a["media_type"], "data": a["data"]}}
+
+
 class HChatClient:
     def __init__(self, cfg: LLMConfig, env=None, transport: httpx.BaseTransport | None = None, sleep=time.sleep):
         env = os.environ if env is None else env
@@ -48,12 +54,13 @@ class HChatClient:
             self._headers["X-Project-Id"] = env["H_CHAT_PROJECT_ID"]
         self._http = httpx.Client(timeout=cfg.timeout_s, transport=transport)
 
-    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict) -> LLMResult:
+    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict, attachments: list[dict] | None = None) -> LLMResult:
         model = self._models.get(agent, self.model)
+        content = prompt if not attachments else [*(_block(a) for a in attachments), {"type": "text", "text": prompt}]
         body = {
             "model": model,
             "system": SYSTEM,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
             "max_tokens": self._max_tokens,
             "stream": False,
             "thinking": {"type": "disabled"},
@@ -65,7 +72,7 @@ class HChatClient:
             raise HChatError("response has no usage (input_tokens/output_tokens): cannot meter this call")
         if not text:
             raise HChatError(f"empty text in response (stop_reason={data.get('stop_reason')!r}, usage={usage})")
-        return LLMResult(text, usage["input_tokens"], usage["output_tokens"], model, attempts, data.get("model"))
+        return LLMResult(text, usage["input_tokens"], usage["output_tokens"], model, attempts, data.get("model"), data.get("stop_reason"))
 
     def _post(self, body: dict) -> tuple[dict, int]:
         last = "unknown error"

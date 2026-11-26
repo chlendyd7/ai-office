@@ -22,7 +22,11 @@ def _split_ref(ref: str) -> tuple[str, int | None]:
     return name, (int(v) if v else None)
 
 
-RESOURCE_FIELDS = ("id", "name", "source_name", "source_type", "pages", "text", "created_at", "updated_at")
+RESOURCE_FIELDS = ("id", "name", "source_name", "source_type", "pages", "text", "created_at", "updated_at",
+                   "review_status", "converted_by", "convert_run_id")
+RESOURCE_DEFAULTS = {"review_status": "verified", "converted_by": "text", "convert_run_id": ""}  # for exports from before these existed
+CONVERTED_BY = ("text", "llm", "mixed")
+REVIEW_STATUS = ("verified", "unverified")
 
 
 def _check_resource(name: str, text: str) -> tuple[str, str]:
@@ -131,20 +135,38 @@ class Library:
             self.db.conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
 
     # ---- resources: the user's own material (resume, experience notes), stored as text so it can be corrected ----
-    def add_resource(self, name: str, text: str, source_name: str = "", source_type: str = "paste", pages: int | None = None) -> str:
+    def add_resource(self, name: str, text: str, source_name: str = "", source_type: str = "paste", pages: int | None = None,
+                     converted_by: str = "text", convert_run_id: str = "") -> str:
+        """Text a model produced (converted_by 'llm' or 'mixed') starts "unverified": it cannot be used as evidence until a
+        human has checked it against the original."""
+        if converted_by not in CONVERTED_BY:
+            raise ValueError(f"converted_by must be one of {CONVERTED_BY}")
         name, text = _check_resource(name, text)
         rid, now = uuid.uuid4().hex[:10], _now()
+        row = (rid, name, source_name, source_type, pages, text, now, now, "verified" if converted_by == "text" else "unverified",
+               converted_by, convert_run_id)
         with self.db.lock:
-            self.db.conn.execute(f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                 (rid, name, source_name, source_type, pages, text, now, now))
+            self.db.conn.execute(f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES ({', '.join('?' * len(RESOURCE_FIELDS))})", row)
         return rid
 
     def list_resources(self) -> list[dict]:
-        """Without the text (it can be long): id, name, type, chars."""
+        """Without the text (it can be long): id, name, type, chars, review state."""
         with self.db.lock:
-            rows = self.db.conn.execute("SELECT id, name, source_name, source_type, pages, length(text), created_at, updated_at "
-                                        "FROM resources ORDER BY created_at, rowid").fetchall()
-        return [dict(zip(("id", "name", "source_name", "source_type", "pages", "chars", "created_at", "updated_at"), r)) for r in rows]
+            rows = self.db.conn.execute("SELECT id, name, source_name, source_type, pages, length(text), created_at, updated_at, "
+                                        "review_status, converted_by, convert_run_id FROM resources ORDER BY created_at, rowid").fetchall()
+        return [dict(zip(("id", "name", "source_name", "source_type", "pages", "chars", "created_at", "updated_at",
+                          "review_status", "converted_by", "convert_run_id"), r)) for r in rows]
+
+    def require_verified(self, resource_ids: list[str]) -> list[dict]:
+        """The resources a task may use as evidence: all must exist and be verified. Returns them (with text)."""
+        out, pending = [], []
+        for rid in resource_ids:
+            r = self.get_resource(rid)  # KeyError for an unknown id
+            (out if r["review_status"] == "verified" else pending).append(r)
+        if pending:
+            raise ValueError("검수 전 리소스는 근거로 쓸 수 없습니다 (원본과 대조 후 '검수 완료'로 표시하세요): "
+                             + ", ".join(f"{r['name']}" for r in pending))
+        return out
 
     def get_resource(self, resource_id: str) -> dict:
         with self.db.lock:
@@ -153,11 +175,14 @@ class Library:
             raise KeyError(resource_id)
         return dict(zip(RESOURCE_FIELDS, r))
 
-    def update_resource(self, resource_id: str, name: str | None = None, text: str | None = None) -> dict:
+    def update_resource(self, resource_id: str, name: str | None = None, text: str | None = None, verified: bool | None = None) -> dict:
+        """Editing the text never changes the review state: only an explicit `verified` does."""
         cur = self.get_resource(resource_id)
         name, text = _check_resource(cur["name"] if name is None else name, cur["text"] if text is None else text)
+        status = cur["review_status"] if verified is None else ("verified" if verified else "unverified")
         with self.db.lock:
-            self.db.conn.execute("UPDATE resources SET name = ?, text = ?, updated_at = ? WHERE id = ?", (name, text, _now(), resource_id))
+            self.db.conn.execute("UPDATE resources SET name = ?, text = ?, review_status = ?, updated_at = ? WHERE id = ?",
+                                 (name, text, status, _now(), resource_id))
         return self.get_resource(resource_id)
 
     def delete_resource(self, resource_id: str) -> None:

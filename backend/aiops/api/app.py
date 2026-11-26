@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from pathlib import Path, PurePath
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
@@ -16,7 +17,8 @@ from pydantic import BaseModel, Field, ValidationError
 from ..core.config import LLMConfig, deep_merge
 from ..core.engine import Engine, GateError
 from ..core.env import load_env_file
-from ..core.extract import extract_text
+from ..core.convert import DEFAULT_MAX_COST_USD, DEFAULT_MODEL, convert, estimate_max_usd
+from ..core.extract import ExtractError, analyze, bad_pages, check_length, ok_text, skip_warnings
 from ..core.jobqueue import JobQueue, Worker
 from ..core.library import Library, parse_import
 from ..core.pricing import load_prices, read_pricing_file
@@ -29,6 +31,7 @@ from ..workflows import REGISTRY
 BACKEND = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).parent / "static"
 PRICING_FILE = BACKEND / "pricing.json"
+INTERNAL_WORKFLOWS = {"convert"}  # runs that record a model call for housekeeping (document conversion): not decisions, not for the Office
 
 
 class StartReq(BaseModel):
@@ -74,11 +77,18 @@ class ResourceReq(BaseModel):  # pasted text
 class ResourceUpdateReq(BaseModel):
     name: str | None = None
     text: str | None = Field(default=None, max_length=400_000)
+    verified: bool | None = None  # an explicit "I checked this against the original"; editing the text never sets it
 
 
 class UploadReq(BaseModel):  # the file travels as base64 inside JSON: no multipart dependency
     filename: str = Field(max_length=300)
     data: str = Field(max_length=15_000_000)
+    # What to do with pages that have no usable text layer. "ask" (default) only reports them: no model is called and nothing is
+    # stored, because a conversion costs money and its result needs a human check.
+    on_bad_pages: Literal["ask", "llm", "skip"] = "ask"
+    mode: str = "hchat"  # LLM for a conversion ("fake" only for tests and demos)
+    model: str = DEFAULT_MODEL
+    max_cost_usd: float = Field(default=DEFAULT_MAX_COST_USD, gt=0, le=1.0)
 
 
 class DatasetRunReq(BaseModel):
@@ -210,7 +220,7 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     # ---- Office surface: limited view + decision only (no process data) ----
     @app.get("/api/office/runs")
     def office_runs():
-        views = [office_view(summarize(store.read(rid))) for rid in reversed(store.list_runs())]
+        views = [v for v in (office_view(summarize(store.read(rid))) for rid in reversed(store.list_runs())) if v["workflow"] not in INTERNAL_WORKFLOWS]
         return [{**{k: v[k] for k in ("run_id", "workflow", "status", "stop_reason", "job", "score", "rounds")},
                  "tokens": v["usage"]["tokens_in"] + v["usage"]["tokens_out"], "cost_usd": v["usage"]["cost_usd"]} for v in views]
 
@@ -435,24 +445,46 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
 
     @app.post("/api/library/resources/upload")
     def resources_upload(req: UploadReq):
-        """TXT / MD / PDF -> text, stored so the user can read and correct it. Scanned PDFs and other formats are refused with a reason."""
+        """TXT / MD / PDF / image -> text, stored so the user can read and correct it. Free where the file has a text layer.
+        Pages without one (scanned, picture, garbled) are not converted behind the user's back: the default answer lists them with
+        a worst-case cost (`needs_conversion`), and the user then picks `llm` (stored as unverified) or `skip`."""
         try:
             raw = base64.b64decode(req.data, validate=True)
         except ValueError:
             raise HTTPException(400, "the file data is not valid base64")
+        name = PurePath(req.filename).stem or "resource"
         try:
-            ex = extract_text(req.filename, raw)
-            name = PurePath(req.filename).stem or "resource"
-            rid = library.add_resource(name, ex["text"], source_name=req.filename, source_type=ex["source_type"], pages=ex["pages"])
-        except ValueError as e:  # ExtractError is a ValueError
+            a = analyze(req.filename, raw)
+            bad = bad_pages(a)
+            if not bad:
+                text = ok_text(a) if a["kind"] == "pdf" else a["text"]
+                pages, warnings, by, run_id, cost = (len(a["pages"]) if a["kind"] == "pdf" else None), [], "text", "", 0.0
+            else:
+                good = ok_text(a)
+                if req.on_bad_pages == "ask":
+                    n = {s: [p["n"] for p in a["pages"] if p["status"] == s] for s in ("ok", "empty", "garbled", "image")}
+                    return {"needs_conversion": True, "kind": a["kind"], "total_pages": len(a["pages"]), "pages": n, "can_skip": bool(good),
+                            "model": req.model, "mode": req.mode, "max_usd": estimate_max_usd(a["kind"], len(bad), req.model, eng.prices)}
+                if req.on_bad_pages == "skip":
+                    if not good:
+                        raise ExtractError("건너뛰면 저장할 글자가 남지 않습니다. LLM 변환을 선택하거나 글자를 복사할 수 있는 파일로 올려 주세요")
+                    text, pages, warnings, by, run_id, cost = good, len(a["pages"]), skip_warnings(a), "text", "", 0.0
+                else:
+                    c = convert(store=store, llm_factory=eng.llm_factory, prices=eng.prices, filename=req.filename, data=raw, analysis=a,
+                                model=req.model, mode=req.mode, max_cost_usd=req.max_cost_usd)
+                    text, pages, warnings, by, run_id, cost = c["text"], len(a["pages"]), c["warnings"], c["converted_by"], c["run_id"], c["cost_usd"]
+            text = check_length(text)
+            rid = library.add_resource(name, text, source_name=req.filename, source_type=a["kind"], pages=pages, converted_by=by, convert_run_id=run_id)
+        except ValueError as e:  # ExtractError and ConvertError are ValueErrors
             raise HTTPException(400, str(e))
-        return {"id": rid, "name": name, "chars": len(ex["text"]), "pages": ex["pages"], "source_type": ex["source_type"], "warnings": ex["warnings"]}
+        return {"id": rid, "name": name, "chars": len(text), "pages": pages, "source_type": a["kind"], "warnings": warnings,
+                "converted_by": by, "review_status": "verified" if by == "text" else "unverified", "convert_run_id": run_id, "cost_usd": cost}
 
     @app.put("/api/library/resources/{resource_id}")
     def resources_update(resource_id: str, req: ResourceUpdateReq):
         resource_or_404(resource_id)
         try:
-            return library.update_resource(resource_id, req.name, req.text)
+            return library.update_resource(resource_id, req.name, req.text, req.verified)
         except ValueError as e:
             raise HTTPException(400, str(e))
 
@@ -489,6 +521,8 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     def rerun(run_id: str, req: RerunReq):
         """Same input and settings snapshot (optionally with overrides) as a new run, to compare against the original."""
         started = events_or_404(run_id)[0]
+        if started["workflow"] in INTERNAL_WORKFLOWS:
+            raise HTTPException(400, "a document conversion is not re-run from here: upload the file again from the library")
         try:
             overrides = with_prompts(started["workflow"], req.overrides, req.prompt_refs)
             new_id = eng.create(started["workflow"], started["input"], deep_merge(started["config"], overrides), parent=run_id)

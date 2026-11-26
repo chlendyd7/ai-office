@@ -41,7 +41,7 @@ def test_text_and_markdown_are_normalized():
 
 
 def test_refusals_say_why():
-    for name, data, msg in (("a.docx", b"x", "TXT, MD, PDF만"), ("noext", b"x", "확장자 없음"), ("a.txt", b"", "빈 파일"),
+    for name, data, msg in (("a.docx", b"x", "TXT, MD, PDF, 이미지"), ("noext", b"x", "확장자 없음"), ("a.txt", b"", "빈 파일"),
                             ("a.txt", b" \n\t ", "글자가 없는"), ("a.txt", b"x" * (MAX_FILE_BYTES + 1), "너무 큽니다"),
                             ("a.txt", ("가" * (MAX_CHARS + 1)).encode(), "너무 많습니다")):
         with pytest.raises(ExtractError, match=msg):
@@ -126,8 +126,11 @@ def test_upload_correct_and_delete_through_the_api(client):
 def test_pdf_upload_and_refusals_through_the_api(client):
     ok = client.post("/api/library/resources/upload", json={"filename": "이력서.pdf", "data": b64((FIX / "sample_ko.pdf").read_bytes())}).json()
     assert ok["pages"] == 2 and ok["source_type"] == "pdf"
-    scan = client.post("/api/library/resources/upload", json={"filename": "s.pdf", "data": b64((FIX / "scanned_like.pdf").read_bytes())})
-    assert scan.status_code == 400 and "스캔본" in scan.json()["detail"]
+    scan_body = {"filename": "s.pdf", "data": b64((FIX / "scanned_like.pdf").read_bytes())}
+    scan = client.post("/api/library/resources/upload", json=scan_body).json()
+    assert scan["needs_conversion"] is True and scan["pages"]["empty"] == [1] and scan["can_skip"] is False  # asks first, calls no model
+    skip = client.post("/api/library/resources/upload", json={**scan_body, "on_bad_pages": "skip"})
+    assert skip.status_code == 400 and "건너뛰면" in skip.json()["detail"]
     assert client.post("/api/library/resources/upload", json={"filename": "a.docx", "data": b64(b"x")}).status_code == 400
     assert client.post("/api/library/resources/upload", json={"filename": "a.txt", "data": "***not base64***"}).status_code == 400
     assert len(client.get("/api/library/resources").json()) == 1  # nothing was stored for the refused files

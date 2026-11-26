@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS resources (      -- the user's own material (resume, 
     pages       INTEGER,
     text        TEXT NOT NULL,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    review_status  TEXT NOT NULL DEFAULT 'verified',  -- 'unverified' until a human has checked an LLM conversion against the original
+    converted_by   TEXT NOT NULL DEFAULT 'text',      -- text | llm | mixed
+    convert_run_id TEXT NOT NULL DEFAULT ''           -- the `convert` run that holds the cost, '' when no model was used
 );
 
 CREATE TABLE IF NOT EXISTS prompts (        -- every save is a new immutable version
@@ -81,6 +84,16 @@ BEGIN SELECT RAISE(ABORT, 'the queue log is append-only'); END;
 """
 
 
+# Columns added after a table first shipped: CREATE TABLE IF NOT EXISTS leaves an existing database untouched, so add them here.
+ADDED_COLUMNS = {
+    "resources": {
+        "review_status": "TEXT NOT NULL DEFAULT 'verified'",
+        "converted_by": "TEXT NOT NULL DEFAULT 'text'",
+        "convert_run_id": "TEXT NOT NULL DEFAULT ''",
+    },
+}
+
+
 class Database:
     """A single shared connection guarded by a lock (the app is one process: API threads + one worker thread)."""
 
@@ -91,6 +104,11 @@ class Database:
         self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)  # autocommit
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        for table, cols in ADDED_COLUMNS.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, ddl in cols.items():
+                if name not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     def close(self) -> None:
         with self.lock:

@@ -19,13 +19,15 @@ class FakeLLM:
         self.scenario = cfg.scenario
         self.delay = cfg.delay_ms / 1000
 
-    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict) -> LLMResult:
+    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict, attachments: list[dict] | None = None) -> LLMResult:
         if self.delay:
             time.sleep(self.delay)
         if purpose == "write":
             text = self._write(meta)
         elif purpose == "review":
             text = self._review(meta)
+        elif purpose == "convert":  # one marker per page, like the real instruction asks for
+            text = "\n".join(f"=== 쪽 {i} ===\n[가짜 변환 {i}쪽]" for i in range(1, meta.get("pages", 1) + 1))
         else:
             raise ValueError(f"FakeLLM: unknown purpose {purpose!r}")
         return LLMResult(text=text, tokens_in=_est_tokens(prompt), tokens_out=_est_tokens(text))

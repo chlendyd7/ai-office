@@ -18,7 +18,10 @@ import sys
 from pathlib import Path
 
 from .core.db import Database, open_db
-from .core.library import RESOURCE_FIELDS
+from .core.library import RESOURCE_DEFAULTS, RESOURCE_FIELDS
+
+
+NON_RUN_FILES = {"queue.jsonl", "datasets.jsonl", "items.jsonl", "prompts.jsonl", "resources.jsonl"}
 
 
 def _dump(e: dict) -> str:
@@ -96,10 +99,10 @@ def _import_library(db: Database, src: Path) -> dict:
             (p["name"], p["version"], p["workflow"], p["role"], p["body"], p["note"], p["created_at"])).rowcount
     for r in _read_lines(src / "resources.jsonl"):  # like items: the more recently edited copy wins
         counts["resources"] += db.conn.execute(
-            f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET name = excluded.name, text = excluded.text, updated_at = excluded.updated_at "
-            "WHERE excluded.updated_at > resources.updated_at",
-            tuple(r[f] for f in RESOURCE_FIELDS)).rowcount
+            f"INSERT INTO resources ({', '.join(RESOURCE_FIELDS)}) VALUES ({', '.join('?' * len(RESOURCE_FIELDS))}) "
+            "ON CONFLICT(id) DO UPDATE SET name = excluded.name, text = excluded.text, review_status = excluded.review_status, "
+            "updated_at = excluded.updated_at WHERE excluded.updated_at > resources.updated_at",
+            tuple(r.get(f, RESOURCE_DEFAULTS.get(f)) for f in RESOURCE_FIELDS)).rowcount
     return counts
 
 
@@ -111,7 +114,7 @@ def import_dir(db: "str | Path | Database", src: str | Path) -> dict:
         db.conn.execute("BEGIN")
         try:
             for f in sorted(run_dir.glob("*.jsonl")):
-                if f.name == "queue.jsonl":
+                if f.name in NON_RUN_FILES:  # a flat legacy folder may sit next to the library files
                     continue
                 added = 0
                 for line in f.read_text(encoding="utf-8").splitlines():
