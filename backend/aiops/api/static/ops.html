@@ -91,7 +91,7 @@ select{width:100%;background:var(--panel2);border:1px solid var(--line);border-r
 .drop{border:2px dashed var(--line);border-radius:10px;padding:22px 12px;text-align:center;color:var(--muted);cursor:pointer}
 .drop.over{border-color:var(--accent);background:var(--panel2);color:var(--text)}
 .it.sel{background:var(--panel2);border-radius:6px}
-.s-converted{color:var(--ok)}
+.s-converted,.s-researched{color:var(--ok)}
 .pend{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;background:var(--panel2)}
 .pend button{padding:3px 10px;font-size:12px;margin:4px 6px 0 0}
 .unv{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;background:var(--panel2)}
@@ -285,7 +285,7 @@ select{width:100%;background:var(--panel2);border:1px solid var(--line);border-r
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const STATUS = {running:'실행 중', awaiting_approval:'승인 대기', approved:'승인됨', rejected:'반려됨', failed:'실패', converted:'변환 완료'};
+const STATUS = {running:'실행 중', awaiting_approval:'승인 대기', approved:'승인됨', rejected:'반려됨', failed:'실패', converted:'변환 완료', researched:'조사 완료'};
 const REASON = {passed:'통과', max_rounds:'라운드 상한', budget_exceeded:'예산 초과', step:'라운드 완료 (단계 승인)'};
 const fmt = n => Number(n).toLocaleString();
 let cur = null, es = null, events = [], summary = null, tab = 'final';

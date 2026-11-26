@@ -23,6 +23,7 @@ from ..core.jobqueue import JobQueue, Worker
 from ..core.library import Library, parse_import
 from ..core.pricing import load_prices, read_pricing_file
 from ..core.projects import Projects
+from ..core.research import estimate_max_usd as estimate_research_usd, research
 from ..core.store import RunStore
 from ..core.summary import summarize
 from ..llm.hchat import HChatClient
@@ -33,7 +34,7 @@ from ..workflows import REGISTRY
 BACKEND = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).parent / "static"
 PRICING_FILE = BACKEND / "pricing.json"
-INTERNAL_WORKFLOWS = {"convert"}  # runs that record a model call for housekeeping (document conversion): not decisions, not for the Office
+INTERNAL_WORKFLOWS = {"convert", "research"}  # runs that record a model call for housekeeping (document conversion): not decisions, not for the Office
 
 
 class StartReq(BaseModel):
@@ -106,6 +107,10 @@ class ProjectUpdateReq(BaseModel):
     settings: dict | None = None
     notes: str | None = None
     title: str | None = None
+
+
+class ResearchReq(BaseModel):
+    confirm_real: bool = False  # web search on the real gateway costs money: it must be asked for on purpose
 
 
 class DraftReq(BaseModel):
@@ -727,6 +732,27 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
             raise HTTPException(400, str(e))
         threading.Thread(target=eng.run_pass, args=(run_id,), daemon=True).start()
         return {"run_id": run_id, "mode": settings["mode"], "budget_usd": settings["budget_usd"]}
+
+    @app.post("/api/projects/{project_id}/research")
+    def project_research(project_id: str, req: ResearchReq):
+        """Research the company with web search, with the project's settings. The result is the project's OWN resource, stored unverified:
+        it joins the project only when a human has read it (and its sources) and signed it off, like any text a model produced."""
+        p = project_or_404(project_id)
+        office = office_or_400(p["office"])
+        if not office.research_subject:
+            raise HTTPException(400, f"office {office.key!r} does not research")
+        subject = office.research_subject(p)
+        if not subject.get("company"):
+            raise HTTPException(400, "조사할 회사가 비어 있습니다")
+        st = clean(office.clean_settings, p["settings"])
+        if st["mode"] == "hchat" and not req.confirm_real:
+            raise HTTPException(400, f"실제 웹 검색은 비용이 듭니다 (검색 {st['research_searches']}회까지, 최대 약 ${estimate_research_usd(st['model_researcher'], st['research_searches'], eng.prices)}). confirm_real=true 로 확인해 주세요")
+        out = clean(research, store=store, llm_factory=eng.llm_factory, prices=eng.prices, company=subject["company"], role=subject.get("role", ""),
+                    model=st["model_researcher"], mode=st["mode"], max_searches=st["research_searches"], budget_usd=st["research_budget_usd"], link={"project_id": project_id})
+        rid = projects.add_own_resource(project_id, f"회사 조사 — {subject['company']}", out["text"], office.research_role, source_name="web_search", source_type="research",
+                                        converted_by="llm", convert_run_id=out["run_id"], meta={**out["meta"], "intended_role": office.research_role})
+        return {"resource_id": rid, "run_id": out["run_id"], "warnings": out["warnings"], "cost_usd": out["cost_usd"], "searches": out["searches"],
+                "sources": len(out["meta"]["sources"]), "cited_sources": sum(1 for s in out["meta"]["sources"] if s["cited"]), "uncited_share": out["meta"]["uncited_share"]}
 
     @app.post("/api/projects/{project_id}/resources")
     def project_attach(project_id: str, req: AttachReq):

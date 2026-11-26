@@ -32,6 +32,24 @@ def _block(a: dict) -> dict:
             "source": {"type": "base64", "media_type": a["media_type"], "data": a["data"]}}
 
 
+def _search_facts(blocks: list[dict], usage: dict) -> dict:
+    """What a web-search answer really contains: the queries run, the pages that came back (not the ones the model claims it read),
+    and the answer split where the gateway attached citations."""
+    queries, sources, seen, segments = [], [], set(), []
+    for b in blocks:
+        kind = b.get("type")
+        if kind == "server_tool_use" and b.get("name") == "web_search":
+            queries.append(str((b.get("input") or {}).get("query", "")))
+        elif kind == "web_search_tool_result" and isinstance(b.get("content"), list):  # an error comes as an object, not a list
+            for r in b["content"]:
+                if r.get("type") == "web_search_result" and r.get("url") and r["url"] not in seen:
+                    seen.add(r["url"])
+                    sources.append({"url": r["url"], "title": r.get("title", ""), "page_age": r.get("page_age") or ""})
+        elif kind == "text" and b.get("text"):
+            segments.append({"text": b["text"], "cites": [c["url"] for c in b.get("citations") or [] if c.get("url")]})
+    return {"searches": int((usage.get("server_tool_use") or {}).get("web_search_requests", len(queries))), "queries": queries, "sources": sources, "segments": segments}
+
+
 class HChatClient:
     def __init__(self, cfg: LLMConfig, env=None, transport: httpx.BaseTransport | None = None, sleep=time.sleep):
         env = os.environ if env is None else env
@@ -54,7 +72,8 @@ class HChatClient:
             self._headers["X-Project-Id"] = env["H_CHAT_PROJECT_ID"]
         self._http = httpx.Client(timeout=cfg.timeout_s, transport=transport)
 
-    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict, attachments: list[dict] | None = None) -> LLMResult:
+    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict, attachments: list[dict] | None = None,
+                 tools: list[dict] | None = None, tool_choice: dict | None = None) -> LLMResult:
         model = self._models.get(agent, self.model)
         content = prompt if not attachments else [*(_block(a) for a in attachments), {"type": "text", "text": prompt}]
         body = {
@@ -65,14 +84,20 @@ class HChatClient:
             "stream": False,
             "thinking": {"type": "disabled"},
         }
+        if tools:
+            body["tools"] = tools
+            if tool_choice:
+                body["tool_choice"] = tool_choice
         data, attempts = self._post(body)
-        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        blocks = data.get("content", [])
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         usage = data.get("usage") or {}
         if "input_tokens" not in usage or "output_tokens" not in usage:
             raise HChatError("response has no usage (input_tokens/output_tokens): cannot meter this call")
         if not text:
             raise HChatError(f"empty text in response (stop_reason={data.get('stop_reason')!r}, usage={usage})")
-        return LLMResult(text, usage["input_tokens"], usage["output_tokens"], model, attempts, data.get("model"), data.get("stop_reason"))
+        extra = _search_facts(blocks, usage) if tools else {}
+        return LLMResult(text, usage["input_tokens"], usage["output_tokens"], model, attempts, data.get("model"), data.get("stop_reason"), **extra)
 
     def _post(self, body: dict) -> tuple[dict, int]:
         last = "unknown error"

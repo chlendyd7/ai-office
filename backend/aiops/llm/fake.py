@@ -19,9 +19,17 @@ class FakeLLM:
         self.scenario = cfg.scenario
         self.delay = cfg.delay_ms / 1000
 
-    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict, attachments: list[dict] | None = None) -> LLMResult:
+    def complete(self, *, agent: str, purpose: str, prompt: str, meta: dict, attachments: list[dict] | None = None,
+                 tools: list[dict] | None = None, tool_choice: dict | None = None) -> LLMResult:
         if self.delay:
             time.sleep(self.delay)
+        if purpose == "research":  # clearly fake: example.com addresses, one cited piece and one uncited piece
+            company = meta.get("company", "회사")
+            text = f"{company}의 사업 개요 (가짜 조사).\n추가로 확인되지 않은 내용도 있다."
+            src = [{"url": "https://example.com/fake-source-1", "title": f"{company} 소개 (가짜)", "page_age": ""},
+                   {"url": "https://example.com/fake-source-2", "title": f"{company} 소식 (가짜)", "page_age": ""}]
+            return LLMResult(text=text, tokens_in=_est_tokens(prompt), tokens_out=_est_tokens(text), searches=1, queries=[f"{company} 소개"], sources=src,
+                             segments=[{"text": f"{company}의 사업 개요 (가짜 조사).", "cites": [src[0]["url"]]}, {"text": "추가로 확인되지 않은 내용도 있다.", "cites": []}])
         if purpose == "write":
             text = self._write(meta)
         elif purpose == "review":

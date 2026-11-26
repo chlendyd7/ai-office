@@ -14,6 +14,7 @@ import re
 from .config import Criterion, LLMConfig, Pricing, RunConfig
 from .extract import bad_pages, check_length, ok_text
 from .metered import BudgetExceeded, MeteredLLM
+from .research import single_model_pricing
 from .store import RunStore
 from .summary import summarize
 
@@ -91,7 +92,7 @@ def convert(*, store: RunStore, llm_factory, prices: dict[str, dict], filename: 
     cfg = RunConfig(
         workflow="convert", rubric=[Criterion(name="-")], budget_usd=max_cost_usd,
         llm=LLMConfig(mode=mode, model=model, max_tokens=min(8000, OUT_TOKENS_PER_PAGE * k + 500), timeout_s=180, max_retries=1),
-        pricing_models={m: Pricing(**p) for m, p in prices.items()},
+        **single_model_pricing(model, prices),
     )
     run_id = store.new_run_id()
     store.append(run_id, "run_started", run_id=run_id, workflow="convert", config=cfg.model_dump(), parent=None,

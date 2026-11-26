@@ -80,6 +80,8 @@ def clean_fields(fields: list[dict], raw: dict) -> dict:
                 v = int(float(v))
             except (TypeError, ValueError):
                 raise ValueError(f"'{f['name']}' must be a number, got {v!r}")
+            if v > f.get("max", float("inf")):
+                raise ValueError(f"'{f['name']}' must be at most {f['max']}")
             if v < f.get("min", 1):
                 raise ValueError(f"'{f['name']}' must be positive" if "min" not in f else f"'{f['name']}' must be at least {f['min']}")
         elif f.get("type") == "decimal":  # any number, within `min` / `max` when given

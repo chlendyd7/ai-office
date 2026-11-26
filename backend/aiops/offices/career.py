@@ -42,10 +42,14 @@ SETTINGS_FIELDS = [
     {"name": "max_rounds", "label": "라운드 상한 (문항 하나)", "type": "number", "default": 3},
     {"name": "budget_usd", "label": "예산 USD (문항 하나)", "type": "decimal", "default": 0.1, "min": 0.001, "max": 5},
     {"name": "step_mode", "label": "라운드마다 멈춰서 확인 (단계 승인)", "type": "bool", "default": False},
+    {"name": "model_researcher", "label": "회사 조사 모델", "type": "text", "default": "claude-haiku-4-5"},
+    {"name": "research_searches", "label": "회사 조사 검색 횟수 상한 (검색 1회 ≈ 입력 약 1.9만 토큰)", "type": "number", "default": 3, "min": 1, "max": 5},
+    {"name": "research_budget_usd", "label": "회사 조사 예산 USD", "type": "decimal", "default": 0.15, "min": 0.01, "max": 2},
     {"name": "prompt_writer", "label": "작성자 프롬프트 (라이브러리: 이름 또는 이름@버전, 비우면 내장)", "type": "text", "required": False},
     {"name": "prompt_reviewer", "label": "심사자 프롬프트 (라이브러리: 이름 또는 이름@버전, 비우면 내장)", "type": "text", "required": False},
 ]
 AGENTS = [
+    {"key": "researcher", "label": "회사 조사", "stage": "company_research", "prompt_role": None},
     {"key": "writer", "label": "작성자", "stage": "drafting", "prompt_role": "writer"},
     {"key": "reviewer", "label": "심사자", "stage": "drafting", "prompt_role": "reviewer"},
 ]
@@ -116,4 +120,6 @@ CAREER = Office(
     run_settings_fields=SETTINGS_FIELDS,
     run_overrides=run_overrides,
     build_input=build_input,
+    research_subject=lambda project: {"company": project["brief"].get("company", ""), "role": project["brief"].get("role", "")},
+    research_role="reference",  # background about the company, not the applicant's own facts nor the job description
 )

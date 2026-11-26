@@ -173,6 +173,8 @@ function render() {
       <p style="margin:6px 0 0"><button class="ghost" data-act="paste">붙여넣은 글 추가</button></p>
       <div id="drop" class="drop">PDF · 이미지 · TXT · MD 파일을 끌어다 놓거나 <u>클릭해서 고르기</u><input id="file" type="file" multiple style="display:none" accept=".pdf,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp,.gif"></div>
       <div id="own-msg" class="muted" style="font-size:12px;margin-top:6px"></div>
+      <p style="margin:10px 0 0"><button class="ghost" data-act="research">🔎 회사 조사 (웹 검색)</button>
+        <span class="muted" style="font-size:12px">${esc(view.project.brief.company || '회사')}를 검색해서 출처가 붙은 조사 글을 만듭니다 · 검색 ${view.settings.research_searches}회까지(1회 ≈ 입력 약 1.9만 토큰) · 결과는 <b>검수 전</b>으로 저장되고 출처를 확인해야 씁니다</span></p>
       <div id="pending"></div>
       ${renderOwn(labels)}
     </div>
@@ -231,9 +233,11 @@ function renderOwn(labels) {  // what belongs to this project alone: including t
   const attached = new Set(view.resources.map(r => r.id));
   return `<h3 style="margin-top:14px">이 프로젝트 전용 자료 관리</h3>` + mine.map(r => `<div class="res"><span class="nm"><b>${esc(r.name)}</b>
       ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전</span>' : attached.has(r.id) ? '<span class="tag ok">사용 중</span>' : '<span class="tag">안 쓰는 중</span>'}</span>
-      <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자${r.converted_by !== 'text' ? ' · LLM 변환' : ''}</span>
+      <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자${r.source_type === 'research' ? ' · 웹 검색' : r.converted_by !== 'text' ? ' · LLM 변환' : ''}</span>
       <button class="ghost sm" data-act="review" data-id="${esc(r.id)}">내용 확인</button><button class="ghost sm" data-act="own-del" data-id="${esc(r.id)}">삭제</button></div>
-      ${reviewing && reviewing.id === r.id ? `<div class="unv">${r.review_status !== 'verified' ? '<b>⚠ 검수 전</b> — 원본 파일과 대조해 틀린 곳을 고친 뒤 <b>검수 완료</b>를 누르면 프로젝트 자료가 됩니다.' : '내용을 고칠 수 있습니다.'}
+      ${reviewing && reviewing.id === r.id ? `<div class="unv">${r.review_status !== 'verified' ? (r.source_type === 'research'
+          ? '<b>⚠ 검수 전</b> — 웹 검색으로 만든 조사 글입니다. 문장 뒤의 [번호]는 맨 아래 출처 목록의 페이지입니다. <b>번호가 없는 문장은 근거가 없는 것</b>이니 주소를 열어 사실인지 확인하고, 틀린 곳은 고친 뒤 <b>검수 완료</b>를 누르면 프로젝트 자료가 됩니다.'
+          : '<b>⚠ 검수 전</b> — 원본 파일과 대조해 틀린 곳을 고친 뒤 <b>검수 완료</b>를 누르면 프로젝트 자료가 됩니다.') : '내용을 고칠 수 있습니다.'}
         <textarea id="rv-text" style="min-height:200px;margin-top:6px">${esc(reviewing.text)}</textarea>
         <p style="margin:6px 0 0"><button class="sm ghost" data-act="rv-save" data-id="${esc(r.id)}">고친 내용 저장</button>
         ${r.review_status !== 'verified' ? `<button class="sm ok" data-act="rv-verify" data-id="${esc(r.id)}">검수 완료</button>` : ''}</p></div>` : ''}`).join('');
@@ -276,6 +280,17 @@ $('#detail').addEventListener('click', async e => {
       await call('DELETE', '/api/projects/' + pid); view = null; await loadList(); return render();
     }
     if (act === 'open-library') return openLibrary();
+    if (act === 'research') {
+      const st = view.settings;
+      if (st.mode === 'hchat' && !confirm('웹 검색은 비용이 듭니다. 모델 ' + st.model_researcher + ' · 검색 ' + st.research_searches + '회까지 (검색 1회 ≈ 입력 약 1.9만 토큰) · 예산 최대 $' + st.research_budget_usd + ' . 시작할까요?')) return;
+      say('회사를 조사하는 중입니다… (수십 초)');
+      const r = await call('POST', `/api/projects/${pid}/research`, {confirm_real: st.mode === 'hchat'});
+      view = await call('GET', '/api/projects/' + pid); await refreshAux();
+      reviewing = {id: r.resource_id, text: (await call('GET', '/api/library/resources/' + r.resource_id)).text};  // open it for reading right away
+      render(); await loadList();
+      say(`조사 완료: 검색 ${r.searches}회 · 출처 ${r.sources}개(인용된 것 ${r.cited_sources}개) · $${r.cost_usd.toFixed(4)}${r.warnings.length ? ' ⚠ ' + r.warnings.join(' / ') : ''} — 아래 "전용 자료 관리"에서 읽고 검수하세요`);
+      return;
+    }
     if (act === 'save-settings') return apply(call('PUT', '/api/projects/' + pid, {settings: readFields($('#settings'))}));
     if (act === 'd-draft') {
       const st = view.settings;

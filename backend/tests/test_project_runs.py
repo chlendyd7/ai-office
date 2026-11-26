@@ -86,7 +86,7 @@ def test_a_project_has_settings_with_free_defaults_that_it_can_change(c):
         assert c.put(f"/api/projects/{pid}", json={"settings": bad}).status_code == 400
     assert c.get(f"/api/projects/{pid}").json()["settings"]["max_rounds"] == 2  # a refused change changed nothing
     decl = c.get("/api/offices").json()["career"]
-    assert [a["key"] for a in decl["agents"]] == ["writer", "reviewer"] and "mode" in [f["name"] for f in decl["run_settings_fields"]]
+    assert [a["key"] for a in decl["agents"]] == ["researcher", "writer", "reviewer"] and "mode" in [f["name"] for f in decl["run_settings_fields"]]
 
 
 # ---- starting a draft ----

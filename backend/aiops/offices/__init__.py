@@ -28,6 +28,8 @@ class Office:
     run_settings_fields: list[dict] = field(default_factory=list)  # a project's settings (models per agent, loop limits, budget...)
     run_overrides: Callable[[dict], dict] | None = None  # cleaned settings -> overrides for the workflow's RunConfig
     build_input: Callable[[dict, dict, dict], dict] | None = None  # (project, deliverable, snapshot) -> the workflow input of one run
+    research_subject: Callable[[dict], dict] | None = None  # project -> {"company", "role"} to research; None = this office does not research
+    research_role: str = ""  # the role a finished research gets when it joins the project
 
     def clean_brief(self, raw: dict) -> dict:
         return clean_fields(self.brief_fields, raw)
