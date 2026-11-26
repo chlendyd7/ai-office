@@ -6,6 +6,7 @@ pipeline -- is declared here, in code, and stored as JSON. See docs/design-task-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from ..workflows.base import clean_fields
 
@@ -19,6 +20,10 @@ class Office:
     deliverable_kinds: dict[str, dict]  # kind -> {"label", "workflow", "spec_fields"}
     stages: list[str] = field(default_factory=list)  # pipeline stage names, in order
     title_fields: tuple[str, ...] = ()  # brief fields that make up a project's title
+    checker: Callable[[dict, list[dict], list[dict]], dict] | None = None  # (brief, deliverables, resources) -> {"blocking", "warnings"}
+    role_labels: dict[str, str] = field(default_factory=dict)  # for screens: role key -> what to call it
+    default_library_role: str = ""  # the role a resource picked from my library gets unless told otherwise
+    default_own_role: str = ""  # the role of text or a file given for this project alone
 
     def clean_brief(self, raw: dict) -> dict:
         return clean_fields(self.brief_fields, raw)
@@ -33,6 +38,23 @@ class Office:
 
     def clean_spec(self, kind: str, raw: dict) -> dict:
         return clean_fields(self.kind(kind)["spec_fields"], raw)
+
+    def measure(self, kind: str, spec: dict, content: str) -> dict:
+        """What the code can measure about a finished deliverable (cover letter: its length by the question's counting rule)."""
+        fn = self.kind(kind).get("measure")
+        return fn(spec, content) if fn else {}
+
+    def check_project(self, brief: dict, deliverables: list[dict], resources: list[dict]) -> dict:
+        """Is the project ready to run? `blocking` must be fixed first; `warnings` may be ignored."""
+        return self.checker(brief, deliverables, resources) if self.checker else {"blocking": [], "warnings": []}
+
+    def declaration(self) -> dict:
+        """What a screen needs to build its forms (functions are left out)."""
+        return {"key": self.key, "label": self.label, "brief_fields": self.brief_fields, "resource_roles": self.resource_roles, "stages": self.stages,
+                "role_labels": {r: self.role_labels.get(r, r) for r in self.resource_roles},
+                "default_library_role": self.default_library_role or self.resource_roles[0],
+                "default_own_role": self.default_own_role or self.resource_roles[0],
+                "deliverable_kinds": {k: {"label": v["label"], "workflow": v["workflow"], "spec_fields": v["spec_fields"]} for k, v in self.deliverable_kinds.items()}}
 
     def check_role(self, role: str) -> None:
         if role not in self.resource_roles:

@@ -84,3 +84,14 @@ def clean_fields(fields: list[dict], raw: dict) -> dict:
                 raise ValueError(f"'{f['name']}' must be positive")
         out[f["name"]] = v
     return out
+
+
+def count_chars(text: str, mode: str = "with_spaces") -> int:
+    """Characters as a recruiting site counts them. `with_spaces`: everything, a line break counting once;
+    `without_spaces`: no spaces, tabs or line breaks. Done by code: a model cannot count."""
+    t = text.replace("\r\n", "\n")
+    if mode == "with_spaces":
+        return len(t)
+    if mode == "without_spaces":
+        return len("".join(t.split()))
+    raise ValueError(f"unknown count mode {mode!r}")

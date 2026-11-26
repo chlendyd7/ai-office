@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>프로젝트</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#0f1318;--panel:#171c23;--panel2:#1d232c;--line:#2a313c;--text:#e6e9ee;--muted:#8b95a5;
+  --accent:#5aa9ff;--ok:#3ecf8e;--warn:#f5b84a;--bad:#ef6b6b;
+}
+@media (prefers-color-scheme:light){:root{--bg:#f4f6f9;--panel:#fff;--panel2:#f0f3f7;--line:#d9dee6;--text:#1b2230;--muted:#667085;--accent:#1f6fd1;--ok:#14935b;--warn:#b7791f;--bad:#d03b3b;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"Segoe UI","Malgun Gothic",sans-serif}
+button,input,textarea,select{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:18px;align-items:center}
+header b{letter-spacing:.2px}header a{color:var(--muted);text-decoration:none}header a:hover{color:var(--text)}
+main{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px;padding:14px 16px}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
+input,textarea,select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+textarea{resize:vertical;min-height:64px}
+button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer;font-weight:600}
+button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+button.bad{background:var(--bad)}button.ok{background:var(--ok)}
+button.sm{padding:2px 9px;font-size:12px}
+.muted{color:var(--muted)}.err{color:var(--bad)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pj{padding:7px 9px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.pj:hover{background:var(--panel2)}.pj.sel{border-color:var(--accent);background:var(--panel2)}
+.pj small{display:block;color:var(--muted)}
+.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:0 8px;font-size:11px;color:var(--muted);margin-left:4px}
+.tag.warn{border-color:var(--warn);color:var(--warn)}.tag.ok{border-color:var(--ok);color:var(--ok)}
+.rd{border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:13px}
+.rd.bad{border:1px solid var(--bad)}.rd.warn{border:1px solid var(--warn)}.rd.ok{border:1px solid var(--ok)}
+.rd ul{margin:4px 0 0;padding-left:18px}
+.dl{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0;background:var(--panel2)}
+.dl-head{display:flex;gap:6px;align-items:center}.dl-head .sp{flex:1}
+.res{display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13px}
+.res .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.res input[type=checkbox]{width:auto}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:16px 10px;text-align:center;color:var(--muted);cursor:pointer;margin-top:8px}
+.drop.over{border-color:var(--accent);background:var(--panel2);color:var(--text)}
+.pend{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:12px;background:var(--panel2)}
+.pend button{margin:4px 6px 0 0}
+.empty{color:var(--muted);padding:40px 10px;text-align:center}
+.unv{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;background:var(--panel2)}
+</style>
+</head>
+<body>
+<header><b>프로젝트</b><a href="/office">Office</a><a href="/ops">AI Ops</a><span id="hdr-msg" class="muted"></span></header>
+<main>
+  <section>
+    <div class="card"><h3>새 프로젝트</h3>
+      <label>오피스</label><select id="n-office"></select>
+      <div id="n-fields"></div>
+      <p style="margin:10px 0 0"><button id="n-create" type="button">만들기</button> <span id="n-err" class="err"></span></p>
+    </div>
+    <div class="card"><h3>내 프로젝트</h3><div id="list"></div></div>
+  </section>
+  <section id="detail"><div class="empty">왼쪽에서 프로젝트를 고르거나 새로 만드세요</div></section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => Number(n).toLocaleString();
+async function call(method, path, body) {
+  const r = await fetch(path, {method, headers: {'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || r.status));
+  return j;
+}
+let offices = {}, officeKey = '', list = [], view = null, libRes = [], ownRes = [], pending = [], reviewing = null;
+const office = () => offices[view ? view.project.office : officeKey];
+
+/* ---------- forms generated from the office's declaration ---------- */
+function fieldHtml(f, v, pre) {
+  const id = `${pre}-${f.name}`, lab = `<label for="${id}">${esc(f.label)}${f.required ? ' *' : ''}</label>`;
+  v = v ?? f.default ?? '';
+  if (f.type === 'textarea') return lab + `<textarea id="${id}" data-f="${esc(f.name)}">${esc(v)}</textarea>`;
+  if (f.type === 'select') return lab + `<select id="${id}" data-f="${esc(f.name)}">${f.options.map(o => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(f.option_labels?.[o] ?? o)}</option>`).join('')}</select>`;
+  return lab + `<input id="${id}" data-f="${esc(f.name)}" type="${f.type === 'number' ? 'number' : 'text'}" ${f.type === 'number' ? 'min="1"' : ''} value="${esc(v)}">`;
+}
+const readFields = el => Object.fromEntries([...el.querySelectorAll('[data-f]')].map(e => [e.dataset.f, e.value]));
+const say = (t, bad) => { $('#hdr-msg').innerHTML = t ? `<span class="${bad ? 'err' : ''}">${esc(t)}</span>` : ''; };
+
+/* ---------- project list and creation ---------- */
+function renderNew() {
+  const o = offices[$('#n-office').value]; officeKey = o.key;
+  $('#n-fields').innerHTML = o.brief_fields.map(f => fieldHtml(f, '', 'n')).join('');
+}
+async function loadList() {
+  list = await call('GET', '/api/projects?office=' + encodeURIComponent(officeKey));
+  $('#list').innerHTML = list.length ? list.map(p => `<div class="pj ${view && view.project.id === p.id ? 'sel' : ''}" data-id="${esc(p.id)}"><b>${esc(p.title)}</b>
+      <small>문항 ${p.deliverables}개 · 최종본 ${p.finals}개</small></div>`).join('') : '<div class="muted">아직 없습니다</div>';
+}
+$('#list').onclick = e => { const el = e.target.closest('.pj'); if (el) openProject(el.dataset.id); };
+$('#n-office').onchange = renderNew;
+$('#n-create').onclick = async () => {
+  $('#n-err').textContent = '';
+  try {
+    const v = await call('POST', '/api/projects', {office: officeKey, brief: readFields($('#n-fields'))});
+    renderNew(); await openProject(v.project.id);
+  } catch (e) { $('#n-err').textContent = e.message; }
+};
+
+/* ---------- one project ---------- */
+async function refreshAux() {
+  libRes = await call('GET', '/api/library/resources');
+  ownRes = await call('GET', '/api/library/resources?owner_project_id=' + view.project.id);
+}
+async function openProject(id) {
+  view = await call('GET', '/api/projects/' + id); pending = []; reviewing = null;
+  await refreshAux(); render(); await loadList(); history.replaceState(null, '', '#' + id);
+}
+async function apply(promise) {  // an action that returns the project view
+  try { view = await promise; say(''); await refreshAux(); render(); await loadList(); }
+  catch (e) { say(e.message, true); }
+}
+function render() {
+  const el = $('#detail');
+  if (!view) { el.innerHTML = '<div class="empty">왼쪽에서 프로젝트를 고르거나 새로 만드세요</div>'; return; }
+  const o = office(), p = view.project, rd = view.readiness, labels = o.role_labels;
+  const kind = Object.entries(o.deliverable_kinds)[0], kinds = Object.entries(o.deliverable_kinds);
+  const attachedIds = new Set(view.resources.map(r => r.id));
+  const readiness = rd.blocking.length ? `<div class="rd bad"><b>시작 전에 해결할 것</b><ul>${rd.blocking.map(x => `<li>${esc(x)}</li>`).join('')}</ul>${rd.warnings.length ? `<div class="muted" style="margin-top:6px">참고</div><ul>${rd.warnings.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`
+    : rd.warnings.length ? `<div class="rd warn"><b>시작할 수 있습니다</b> — 아래는 결과를 약하게 만들 수 있는 점입니다<ul>${rd.warnings.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '<div class="rd ok"><b>준비됨</b></div>';
+  el.innerHTML = `
+    <div class="card"><div style="display:flex;gap:8px;align-items:center"><h3 style="margin:0;flex:1">${esc(o.label)} · 프로젝트</h3>
+      <span class="tag">상태: 작성 전</span><button class="ghost sm" data-act="del-project">프로젝트 삭제</button></div>
+      <h2 style="margin:6px 0 8px;font-size:18px">${esc(p.title)}</h2>${readiness}
+      <div class="muted" style="font-size:12px">문서를 쓰는 단계(조사 → 매칭 → 작성 → 승인)는 다음 단계에서 이 프로젝트에 연결됩니다. 지금은 쓸 재료를 모으는 곳입니다.</div></div>
+
+    <div class="card" id="brief"><h3>기본 정보</h3>${o.brief_fields.map(f => fieldHtml(f, p.brief[f.name], 'b')).join('')}
+      <label>메모</label><textarea data-notes>${esc(p.notes)}</textarea>
+      <p style="margin:8px 0 0"><button data-act="save-brief">저장</button></p></div>
+
+    <div class="card"><h3>자료 — 이 프로젝트가 쓰는 것</h3>
+      ${view.resources.length ? view.resources.map(r => `<div class="res"><span class="nm"><b>${esc(r.name)}</b> <span class="tag">${esc(labels[r.role] ?? r.role)}</span>
+        ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전</span>' : ''}${r.owner_project_id ? '<span class="tag">이 프로젝트 전용</span>' : ''}</span>
+        <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자</span><button class="ghost sm" data-act="detach" data-id="${esc(r.id)}">빼기</button></div>`).join('') : '<div class="muted">아직 없습니다</div>'}
+
+      <h3 style="margin-top:14px">내 라이브러리에서 고르기 <span class="muted" style="text-transform:none">(검수 완료된 자료만)</span></h3>
+      <div class="row"><div><label>붙일 때의 역할</label><select id="lib-role">${o.resource_roles.map(r => `<option value="${esc(r)}" ${r === o.default_library_role ? 'selected' : ''}>${esc(labels[r])}</option>`).join('')}</select></div></div>
+      ${libRes.length ? libRes.map(r => `<div class="res"><input type="checkbox" data-act="toggle" data-id="${esc(r.id)}" ${attachedIds.has(r.id) ? 'checked' : ''} ${r.review_status !== 'verified' ? 'disabled' : ''}>
+        <span class="nm">${esc(r.name)} ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전 — 라이브러리에서 확인 필요</span>' : ''}</span>
+        <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자</span></div>`).join('') : '<div class="muted">라이브러리가 비어 있습니다. Ops의 📚 라이브러리에서 이력서·경험 정리를 올리세요.</div>'}
+
+      <h3 style="margin-top:14px">이 프로젝트 전용 자료 추가 <span class="muted" style="text-transform:none">(직무 설명 등 · 붙여넣기 또는 파일·이미지)</span></h3>
+      <div class="row"><div><label>역할</label><select id="own-role">${o.resource_roles.map(r => `<option value="${esc(r)}" ${r === o.default_own_role ? 'selected' : ''}>${esc(labels[r])}</option>`).join('')}</select></div>
+        <div><label>이름</label><input id="own-name" placeholder="예: 직무 설명"></div></div>
+      <textarea id="own-text" placeholder="텍스트를 붙여넣기" style="margin-top:6px"></textarea>
+      <p style="margin:6px 0 0"><button class="ghost" data-act="paste">붙여넣은 글 추가</button></p>
+      <div id="drop" class="drop">PDF · 이미지 · TXT · MD 파일을 끌어다 놓거나 <u>클릭해서 고르기</u><input id="file" type="file" multiple style="display:none" accept=".pdf,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp,.gif"></div>
+      <div id="own-msg" class="muted" style="font-size:12px;margin-top:6px"></div>
+      <div id="pending"></div>
+      ${renderOwn(labels)}
+    </div>
+
+    <div class="card" id="dels"><h3>${esc(kinds.length === 1 ? kind[1].label : '산출물')} (${view.deliverables.length})</h3>
+      ${view.deliverables.map((d, i) => renderDeliverable(d, i, o)).join('') || '<div class="muted">아직 없습니다</div>'}
+      <div style="margin-top:10px">${kinds.length > 1 ? `<select id="d-kind">${kinds.map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`).join('')}</select>` : ''}
+        <label>새 ${esc(kind[1].label)} 원문</label><textarea id="d-new" placeholder="예: 지원동기를 서술하시오 (800자 이내)"></textarea>
+        <p style="margin:6px 0 0"><button data-act="d-add">추가</button></p></div></div>`;
+  renderPending();
+}
+function renderDeliverable(d, i, o) {
+  const kind = o.deliverable_kinds[d.kind];
+  return `<div class="dl" data-id="${esc(d.id)}"><div class="dl-head"><b>${i + 1}.</b><span class="tag">${esc(kind ? kind.label : d.kind)}</span><span class="sp"></span>
+      <button class="ghost sm" data-act="d-up" ${i === 0 ? 'disabled' : ''}>↑</button><button class="ghost sm" data-act="d-down" ${i === view.deliverables.length - 1 ? 'disabled' : ''}>↓</button>
+      <button class="ghost sm" data-act="d-del">삭제</button></div>
+    <label>원문</label><textarea data-f="title">${esc(d.title)}</textarea>
+    <div class="row">${(kind ? kind.spec_fields : []).filter(f => f.type !== 'textarea').map(f => `<div>${fieldHtml(f, d.spec[f.name], 'd' + d.id)}</div>`).join('')}</div>
+    ${(kind ? kind.spec_fields : []).filter(f => f.type === 'textarea').map(f => fieldHtml(f, d.spec[f.name], 'd' + d.id)).join('')}
+    <p style="margin:8px 0 0"><button class="sm" data-act="d-save">저장</button></p></div>`;
+}
+function renderOwn(labels) {  // what belongs to this project alone: including text that still waits for a human check
+  const mine = ownRes;
+  if (!mine.length) return '';
+  const attached = new Set(view.resources.map(r => r.id));
+  return `<h3 style="margin-top:14px">이 프로젝트 전용 자료 관리</h3>` + mine.map(r => `<div class="res"><span class="nm"><b>${esc(r.name)}</b>
+      ${r.review_status !== 'verified' ? '<span class="tag warn">검수 전</span>' : attached.has(r.id) ? '<span class="tag ok">사용 중</span>' : '<span class="tag">안 쓰는 중</span>'}</span>
+      <span class="muted">${esc(r.source_type)} · ${fmt(r.chars)}자${r.converted_by !== 'text' ? ' · LLM 변환' : ''}</span>
+      <button class="ghost sm" data-act="review" data-id="${esc(r.id)}">내용 확인</button><button class="ghost sm" data-act="own-del" data-id="${esc(r.id)}">삭제</button></div>
+      ${reviewing && reviewing.id === r.id ? `<div class="unv">${r.review_status !== 'verified' ? '<b>⚠ 검수 전</b> — 원본 파일과 대조해 틀린 곳을 고친 뒤 <b>검수 완료</b>를 누르면 프로젝트 자료가 됩니다.' : '내용을 고칠 수 있습니다.'}
+        <textarea id="rv-text" style="min-height:200px;margin-top:6px">${esc(reviewing.text)}</textarea>
+        <p style="margin:6px 0 0"><button class="sm ghost" data-act="rv-save" data-id="${esc(r.id)}">고친 내용 저장</button>
+        ${r.review_status !== 'verified' ? `<button class="sm ok" data-act="rv-verify" data-id="${esc(r.id)}">검수 완료</button>` : ''}</p></div>` : ''}`).join('');
+}
+
+/* ---------- actions ---------- */
+const readB64 = f => new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(',')[1]); rd.onerror = () => no(rd.error); rd.readAsDataURL(f); });
+const PAGE_WHY = {empty: '글자 없음', garbled: '글자 깨짐', image: '이미지'};
+function renderPending() {
+  const el = $('#pending'); if (!el) return;
+  el.innerHTML = pending.map((p, i) => {
+    const bad = Object.entries(p.info.pages).filter(([s, ns]) => s !== 'ok' && ns.length).map(([s, ns]) => `${ns.join(', ')}쪽(${PAGE_WHY[s]})`).join(' · ');
+    return `<div class="pend"><b>${esc(p.file.name)}</b> — ${p.info.kind === 'image' ? '이미지는 글자 층이 없어' : esc(bad) + '은(는) 글자를 읽을 수 없어'} 모델로 변환해야 합니다.
+      <div class="muted">변환할 쪽만 보내며 비용은 최대 약 $${p.info.max_usd} (모델 ${esc(p.info.model)}). 결과는 <b>검수 전</b>으로 저장되고, 직접 확인해야 이 프로젝트의 자료가 됩니다.</div>
+      <button class="sm" data-act="p-llm" data-i="${i}">LLM으로 변환</button>${p.info.can_skip ? `<button class="ghost sm" data-act="p-skip" data-i="${i}">글자 있는 쪽만 저장</button>` : ''}<button class="ghost sm" data-act="p-cancel" data-i="${i}">취소</button></div>`;
+  }).join('');
+}
+async function sendOwn(file, role, onBad) {
+  const r = await call('POST', `/api/projects/${view.project.id}/resources/upload`, {filename: file.name, data: await readB64(file), role, on_bad_pages: onBad});
+  if (r.needs_conversion) { pending.push({file, role, info: r}); return `${file.name}: 변환 여부를 정해 주세요`; }
+  return `✔ ${file.name} → ${fmt(r.chars)}자${r.attached ? ' (프로젝트 자료로 추가됨)' : ' — 검수 전: 아래 "전용 자료 관리"에서 확인 후 검수 완료'}${r.warnings.length ? ' ⚠ ' + r.warnings.join('; ') : ''}`;
+}
+async function uploadFiles(files) {
+  const role = $('#own-role').value, msgs = [];
+  for (const f of files) { try { msgs.push(await sendOwn(f, role, 'ask')); } catch (e) { msgs.push(`✘ ${f.name}: ${e.message}`); } }
+  await finishUpload(msgs);
+}
+async function finishUpload(msgs) {
+  view = await call('GET', '/api/projects/' + view.project.id); await refreshAux(); render(); await loadList();
+  if ($('#own-msg')) $('#own-msg').innerHTML = msgs.map(esc).join('<br>');
+}
+$('#detail').addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b && e.target.closest('#drop')) return $('#file').click(); if (!b) return;
+  const act = b.dataset.act, id = b.dataset.id, card = b.closest('.dl'), pid = view && view.project.id;
+  try {
+    if (act === 'toggle') return;  // handled on change
+    if (act === 'save-brief') return apply(call('PUT', '/api/projects/' + pid, {brief: readFields($('#brief')), notes: $('#brief [data-notes]').value}));
+    if (act === 'del-project') {
+      if (!confirm(`"${view.project.title}" 프로젝트를 삭제할까요?\n문항, 자료 연결, 이 프로젝트 전용 자료가 함께 지워집니다. (내 라이브러리 자료와 실행 기록은 그대로)`)) return;
+      await call('DELETE', '/api/projects/' + pid); view = null; await loadList(); return render();
+    }
+    if (act === 'detach') return apply(call('DELETE', `/api/projects/${pid}/resources/${id}`));
+    if (act === 'paste') return apply(call('POST', `/api/projects/${pid}/resources/paste`, {name: $('#own-name').value, text: $('#own-text').value, role: $('#own-role').value}));
+    if (act === 'd-add') return apply(call('POST', `/api/projects/${pid}/deliverables`, {kind: $('#d-kind') ? $('#d-kind').value : Object.keys(office().deliverable_kinds)[0], title: $('#d-new').value}));
+    if (act === 'd-save') { const f = readFields(card), title = f.title; delete f.title; return apply(call('PUT', '/api/deliverables/' + card.dataset.id, {title, spec: f})); }
+    if (act === 'd-del') { if (confirm('이 항목을 삭제할까요?')) return apply(call('DELETE', '/api/deliverables/' + card.dataset.id)); return; }
+    if (act === 'd-up' || act === 'd-down') {
+      const ids = view.deliverables.map(d => d.id), i = ids.indexOf(card.dataset.id), j = i + (act === 'd-up' ? -1 : 1);
+      [ids[i], ids[j]] = [ids[j], ids[i]]; return apply(call('POST', `/api/projects/${pid}/deliverables/order`, {ids}));
+    }
+    if (act === 'p-cancel') { pending.splice(+b.dataset.i, 1); return renderPending(); }
+    if (act === 'p-llm' || act === 'p-skip') {
+      const [p] = pending.splice(+b.dataset.i, 1); renderPending();
+      $('#own-msg').textContent = act === 'p-llm' ? `${p.file.name}: LLM으로 변환하는 중… (몇 초~수십 초)` : '';
+      let msg; try { msg = await sendOwn(p.file, p.role, act === 'p-llm' ? 'llm' : 'skip'); } catch (err) { msg = `✘ ${p.file.name}: ${err.message}`; }
+      return finishUpload([msg]);
+    }
+    if (act === 'review') { reviewing = reviewing && reviewing.id === id ? null : {id, text: (await call('GET', '/api/library/resources/' + id)).text}; return render(); }
+    if (act === 'rv-save' || act === 'rv-verify') {
+      await call('PUT', '/api/library/resources/' + id, act === 'rv-verify' ? {text: $('#rv-text').value, verified: true} : {text: $('#rv-text').value});
+      reviewing = null; return apply(call('GET', '/api/projects/' + pid));
+    }
+    if (act === 'own-del') {
+      if (!confirm('이 전용 자료를 삭제할까요?')) return;
+      await call('DELETE', `/api/projects/${pid}/resources/${id}`); await call('DELETE', '/api/library/resources/' + id);
+      return apply(call('GET', '/api/projects/' + pid));
+    }
+  } catch (err) { say(err.message, true); }
+});
+$('#detail').addEventListener('change', e => {
+  const b = e.target.closest('[data-act=toggle]'); if (b) {
+    const pid = view.project.id, id = b.dataset.id;
+    apply(b.checked ? call('POST', `/api/projects/${pid}/resources`, {resource_id: id, role: $('#lib-role').value}) : call('DELETE', `/api/projects/${pid}/resources/${id}`));
+    return;
+  }
+  if (e.target.id === 'file') { uploadFiles([...e.target.files]); e.target.value = ''; }
+});
+['dragenter', 'dragover'].forEach(ev => $('#detail').addEventListener(ev, e => { const d = e.target.closest('#drop'); if (d) { e.preventDefault(); d.classList.add('over'); } }));
+['dragleave', 'drop'].forEach(ev => $('#detail').addEventListener(ev, e => { const d = e.target.closest('#drop'); if (d) { e.preventDefault(); d.classList.remove('over'); } }));
+$('#detail').addEventListener('drop', e => { if (e.target.closest('#drop')) uploadFiles([...e.dataTransfer.files]); });
+
+/* ---------- start ---------- */
+(async () => {
+  offices = await call('GET', '/api/offices');
+  $('#n-office').innerHTML = Object.values(offices).map(o => `<option value="${esc(o.key)}">${esc(o.label)}</option>`).join('');
+  renderNew(); await loadList();
+  if (location.hash.length > 1) openProject(decodeURIComponent(location.hash.slice(1))).catch(() => {});
+})().catch(e => say(e.message, true));
+</script>
+</body>
+</html>

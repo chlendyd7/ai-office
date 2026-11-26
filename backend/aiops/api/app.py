@@ -22,9 +22,11 @@ from ..core.extract import ExtractError, analyze, bad_pages, check_length, ok_te
 from ..core.jobqueue import JobQueue, Worker
 from ..core.library import Library, parse_import
 from ..core.pricing import load_prices, read_pricing_file
+from ..core.projects import Projects
 from ..core.store import RunStore
 from ..core.summary import summarize
 from ..llm.hchat import HChatClient
+from ..offices import OFFICES
 from ..office.view import activity, office_view
 from ..workflows import REGISTRY
 
@@ -91,6 +93,53 @@ class UploadReq(BaseModel):  # the file travels as base64 inside JSON: no multip
     max_cost_usd: float = Field(default=DEFAULT_MAX_COST_USD, gt=0, le=1.0)
 
 
+class ProjectReq(BaseModel):
+    office: str
+    brief: dict = Field(default_factory=dict)
+    notes: str = ""
+    title: str | None = None  # default: the office builds it from the brief ("회사 · 직무")
+
+
+class ProjectUpdateReq(BaseModel):
+    brief: dict | None = None
+    notes: str | None = None
+    title: str | None = None
+
+
+class DeliverableReq(BaseModel):
+    kind: str
+    title: str = Field(max_length=2000)
+    spec: dict = Field(default_factory=dict)
+
+
+class DeliverableUpdateReq(BaseModel):
+    title: str | None = Field(default=None, max_length=2000)
+    spec: dict | None = None
+
+
+class OrderReq(BaseModel):
+    ids: list[str]
+
+
+class FinalReq(BaseModel):
+    content: str = Field(max_length=200_000)
+
+
+class AttachReq(BaseModel):
+    resource_id: str
+    role: str = "evidence"
+
+
+class OwnPasteReq(BaseModel):  # text pasted for this project alone (a job description)
+    name: str
+    text: str = Field(max_length=400_000)
+    role: str
+
+
+class OwnUploadReq(UploadReq):  # a file for this project alone: same conversion rules as the library
+    role: str
+
+
 class DatasetRunReq(BaseModel):
     overrides: dict = Field(default_factory=dict)
     prompt_refs: dict[str, str] = Field(default_factory=dict)
@@ -139,6 +188,7 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     if start_worker:
         worker.start_thread()
     library = Library(store.db)
+    projects = Projects(store.db)
     app = FastAPI(title="AI Ops")
     app.state.worker, app.state.queue = worker, queue
 
@@ -212,6 +262,10 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
     @app.get("/ops")
     def ops_page():
         return FileResponse(STATIC / "ops.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/projects")
+    def projects_page():
+        return FileResponse(STATIC / "projects.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/office")
     def office_page():
@@ -429,8 +483,9 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
             raise HTTPException(404, f"resource not found: {resource_id}")
 
     @app.get("/api/library/resources")
-    def resources_list():
-        return library.list_resources()
+    def resources_list(owner_project_id: str = ""):
+        """My library by default; `owner_project_id` lists what belongs to that project alone (including what still awaits a check)."""
+        return library.list_resources(owner_project_id)
 
     @app.get("/api/library/resources/{resource_id}")
     def resources_get(resource_id: str):
@@ -443,8 +498,7 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
         except ValueError as e:
             raise HTTPException(400, str(e))
 
-    @app.post("/api/library/resources/upload")
-    def resources_upload(req: UploadReq):
+    def ingest(req: UploadReq, owner_project_id: str = "", role: str | None = None) -> dict:
         """TXT / MD / PDF / image -> text, stored so the user can read and correct it. Free where the file has a text layer.
         Pages without one (scanned, picture, garbled) are not converted behind the user's back: the default answer lists them with
         a worst-case cost (`needs_conversion`), and the user then picks `llm` (stored as unverified) or `skip`."""
@@ -474,25 +528,179 @@ def create_app(data_dir: str | Path = BACKEND / "data", engine: Engine | None = 
                                 model=req.model, mode=req.mode, max_cost_usd=req.max_cost_usd)
                     text, pages, warnings, by, run_id, cost = c["text"], len(a["pages"]), c["warnings"], c["converted_by"], c["run_id"], c["cost_usd"]
             text = check_length(text)
-            rid = library.add_resource(name, text, source_name=req.filename, source_type=a["kind"], pages=pages, converted_by=by, convert_run_id=run_id)
+            rid = library.add_resource(name, text, source_name=req.filename, source_type=a["kind"], pages=pages, converted_by=by, convert_run_id=run_id,
+                                       owner_project_id=owner_project_id, meta={"intended_role": role} if role else None)
         except ValueError as e:  # ExtractError and ConvertError are ValueErrors
             raise HTTPException(400, str(e))
         return {"id": rid, "name": name, "chars": len(text), "pages": pages, "source_type": a["kind"], "warnings": warnings,
                 "converted_by": by, "review_status": "verified" if by == "text" else "unverified", "convert_run_id": run_id, "cost_usd": cost}
 
+    @app.post("/api/library/resources/upload")
+    def resources_upload(req: UploadReq):
+        return ingest(req)
+
     @app.put("/api/library/resources/{resource_id}")
     def resources_update(resource_id: str, req: ResourceUpdateReq):
         resource_or_404(resource_id)
         try:
-            return library.update_resource(resource_id, req.name, req.text, req.verified)
+            r = library.update_resource(resource_id, req.name, req.text, req.verified)
+            role = r["meta"].get("intended_role")
+            if req.verified and r["owner_project_id"] and role:  # a project's own resource, checked: it joins the project as it was meant to
+                projects.attach_resource(r["owner_project_id"], resource_id, role)
+                r["attached"] = True
+            return r
         except ValueError as e:
             raise HTTPException(400, str(e))
 
     @app.delete("/api/library/resources/{resource_id}")
     def resources_delete(resource_id: str):
         resource_or_404(resource_id)
-        library.delete_resource(resource_id)
+        try:
+            library.delete_resource(resource_id)
+        except ValueError as e:  # a project still uses it
+            raise HTTPException(409, str(e))
         return {"ok": True}
+
+    # ---- offices and their projects ----
+    def project_or_404(project_id: str) -> dict:
+        try:
+            return projects.get_project(project_id)
+        except KeyError:
+            raise HTTPException(404, f"project not found: {project_id}")
+
+    def office_or_400(key: str):
+        office = OFFICES.get(key)
+        if not office:
+            raise HTTPException(400, f"unknown office {key!r} (offices: {', '.join(OFFICES)})")
+        return office
+
+    def deliverable_or_404(deliverable_id: str) -> dict:
+        try:
+            return projects.get_deliverable(deliverable_id)
+        except KeyError:
+            raise HTTPException(404, f"deliverable not found: {deliverable_id}")
+
+    def project_view(project_id: str) -> dict:
+        p = project_or_404(project_id)
+        ds, rs = projects.list_deliverables(project_id), projects.list_project_resources(project_id)
+        # the office says what is still missing; `status` is "draft" until the pipeline can run (derived from run records later)
+        return {"project": p, "deliverables": ds, "resources": rs, "status": "draft",
+                "readiness": office_or_400(p["office"]).check_project(p["brief"], ds, rs)}
+
+    def clean(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/offices")
+    def offices_list():
+        return {k: o.declaration() for k, o in OFFICES.items()}
+
+    @app.get("/api/projects")
+    def projects_list(office: str | None = None):
+        return projects.list_projects(office)
+
+    @app.post("/api/projects")
+    def projects_create(req: ProjectReq):
+        office = office_or_400(req.office)
+        brief = clean(office.clean_brief, req.brief)
+        pid = clean(projects.create_project, office.key, req.title or office.title_for(brief), brief, req.notes)
+        return project_view(pid)
+
+    @app.get("/api/projects/{project_id}")
+    def projects_get(project_id: str):
+        return project_view(project_id)
+
+    @app.put("/api/projects/{project_id}")
+    def projects_update(project_id: str, req: ProjectUpdateReq):
+        office = office_or_400(project_or_404(project_id)["office"])
+        brief = clean(office.clean_brief, req.brief) if req.brief is not None else None
+        title = req.title if req.title is not None else (office.title_for(brief) if brief is not None else None)
+        clean(projects.update_project, project_id, title, brief, req.notes)
+        return project_view(project_id)
+
+    @app.delete("/api/projects/{project_id}")
+    def projects_delete(project_id: str):
+        project_or_404(project_id)
+        return {"deleted": projects.delete_project(project_id)}
+
+    @app.post("/api/projects/{project_id}/deliverables")
+    def deliverables_add(project_id: str, req: DeliverableReq):
+        office = office_or_400(project_or_404(project_id)["office"])
+        spec = clean(office.clean_spec, req.kind, req.spec)
+        clean(projects.add_deliverable, project_id, req.kind, req.title, spec)
+        return project_view(project_id)
+
+    @app.post("/api/projects/{project_id}/deliverables/order")
+    def deliverables_order(project_id: str, req: OrderReq):
+        project_or_404(project_id)
+        clean(projects.reorder, project_id, req.ids)
+        return project_view(project_id)
+
+    @app.put("/api/deliverables/{deliverable_id}")
+    def deliverables_update(deliverable_id: str, req: DeliverableUpdateReq):
+        d = deliverable_or_404(deliverable_id)
+        office = office_or_400(project_or_404(d["project_id"])["office"])
+        spec = clean(office.clean_spec, d["kind"], req.spec) if req.spec is not None else None
+        clean(projects.update_deliverable, deliverable_id, req.title, spec)
+        return project_view(d["project_id"])
+
+    @app.delete("/api/deliverables/{deliverable_id}")
+    def deliverables_delete(deliverable_id: str):
+        d = deliverable_or_404(deliverable_id)
+        projects.delete_deliverable(deliverable_id)
+        return project_view(d["project_id"])
+
+    @app.put("/api/deliverables/{deliverable_id}/final")
+    def final_edit(deliverable_id: str, req: FinalReq):
+        """The human reworks an approved final; the code re-measures it (a cover letter: its length by the question's counting rule)."""
+        d = deliverable_or_404(deliverable_id)
+        office = office_or_400(project_or_404(d["project_id"])["office"])
+        clean(projects.edit_final, deliverable_id, req.content, clean(office.measure, d["kind"], d["spec"], req.content))
+        return project_view(d["project_id"])
+
+    @app.delete("/api/deliverables/{deliverable_id}/final")
+    def final_clear(deliverable_id: str):
+        d = deliverable_or_404(deliverable_id)
+        projects.clear_final(deliverable_id)
+        return project_view(d["project_id"])
+
+    @app.post("/api/projects/{project_id}/resources")
+    def project_attach(project_id: str, req: AttachReq):
+        office = office_or_400(project_or_404(project_id)["office"])
+        clean(office.check_role, req.role)
+        try:
+            projects.attach_resource(project_id, req.resource_id, req.role)
+        except KeyError:
+            raise HTTPException(404, f"resource not found: {req.resource_id}")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return project_view(project_id)
+
+    @app.delete("/api/projects/{project_id}/resources/{resource_id}")
+    def project_detach(project_id: str, resource_id: str):
+        project_or_404(project_id)
+        projects.detach_resource(project_id, resource_id)
+        return project_view(project_id)
+
+    @app.post("/api/projects/{project_id}/resources/paste")
+    def project_paste(project_id: str, req: OwnPasteReq):
+        office = office_or_400(project_or_404(project_id)["office"])
+        clean(office.check_role, req.role)
+        clean(projects.add_own_resource, project_id, req.name, req.text, req.role, meta={"intended_role": req.role})
+        return project_view(project_id)
+
+    @app.post("/api/projects/{project_id}/resources/upload")
+    def project_upload(project_id: str, req: OwnUploadReq):
+        """A file for this project alone (say, the job description as an image). Text it could read is attached at once; what a model
+        converted is kept unverified and joins the project only after a human has checked it (see PUT /api/library/resources/{id})."""
+        office = office_or_400(project_or_404(project_id)["office"])
+        clean(office.check_role, req.role)
+        out = ingest(req, owner_project_id=project_id, role=req.role)
+        if out.get("id") and out["review_status"] == "verified":
+            projects.attach_resource(project_id, out["id"], req.role)
+        return {**out, "attached": bool(out.get("id")) and out["review_status"] == "verified"}
 
     @app.get("/api/runs")
     def list_runs():
